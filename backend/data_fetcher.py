@@ -156,6 +156,65 @@ def fetch_with_cache(
         return df
 
 
+def get_coingecko_ohlc(
+    days: int = 1,
+) -> pd.DataFrame:
+    """Fetch BTC OHLC candles from CoinGecko (fallback when Binance is blocked).
+
+    Returns DataFrame with same columns as get_binance_klines.
+    CoinGecko OHLC intervals: 30m candles (close enough for indicator computation).
+    """
+    url = "https://api.coingecko.com/api/v3/coins/bitcoin/ohlc"
+    params = {"vs_currency": "usd", "days": days}
+
+    try:
+        resp = requests.get(url, params=params, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        print(f"  Warning: CoinGecko request failed: {e}")
+        return pd.DataFrame(columns=COLUMNS)
+
+    if not data:
+        return pd.DataFrame(columns=COLUMNS)
+
+    rows = []
+    for candle in data:
+        ts, open_p, high, low, close = candle
+        rows.append({
+            "open_time": int(ts),
+            "open": float(open_p),
+            "high": float(high),
+            "low": float(low),
+            "close": float(close),
+            "volume": 0.0,  # CoinGecko OHLC doesn't include volume
+            "close_time": int(ts) + 1_799_999,  # ~30 min
+        })
+
+    df = pd.DataFrame(rows, columns=COLUMNS)
+    df = df.drop_duplicates(subset="open_time").sort_values("open_time").reset_index(drop=True)
+    return df
+
+
+def get_price_with_fallback(
+    symbol: str,
+    interval: str,
+    start_time: int,
+    end_time: int,
+) -> pd.DataFrame:
+    """Try Binance first, fall back to CoinGecko if blocked."""
+    try:
+        df = get_binance_klines(symbol, interval, start_time, end_time)
+        if len(df) > 0:
+            return df
+    except Exception:
+        pass
+
+    # Binance failed — try CoinGecko
+    print("  Binance unavailable, falling back to CoinGecko...")
+    return get_coingecko_ohlc(days=1)
+
+
 if __name__ == "__main__":
     # Quick sanity check: fetch last 5 days with caching
     now = int(time.time() * 1000)

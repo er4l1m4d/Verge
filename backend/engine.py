@@ -157,27 +157,27 @@ def get_current_odds(token_id: str) -> float | None:
 
 
 def get_current_price_data():
-    """4.3 — Fetch recent Binance 5m candles for indicator computation.
+    """4.3 — Fetch recent 5m candles for indicator computation.
 
+    Tries Binance first, falls back to CoinGecko if blocked.
     Returns a DataFrame ready for the indicator functions.
     """
     import time as _time
-    from data_fetcher import get_binance_klines
+    from data_fetcher import get_price_with_fallback
 
     now_ms = int(_time.time() * 1000)
     start_ms = now_ms - (50 * 5 * 60 * 1000)  # 50 candles back
 
     try:
-        df = get_binance_klines(
+        df = get_price_with_fallback(
             symbol="BTCUSDT",
             interval="5m",
             start_time=start_ms,
             end_time=now_ms,
-            limit=50,
         )
         return df if df is not None and len(df) > 0 else None
     except Exception as e:
-        log.warning(f"Binance price fetch failed: {e}")
+        log.warning(f"Price fetch failed: {e}")
         return None
 
 
