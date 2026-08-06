@@ -263,3 +263,125 @@ def generate_signal() -> LiveSignal:
         minutes_remaining=minutes_remaining,
         hour_open_time=hour_open_time,
     )
+
+
+# --- Phase 5: Persistence ---
+
+def persist_signal(sig: LiveSignal) -> None:
+    """Write signal + paper trade + odds snapshot to Supabase (Phase 5.2)."""
+    import db
+
+    client = db.get_client()
+    window = sig.hour_open_time or int(time.time() * 1000) - 3_600_000
+
+    # Check idempotency: don't duplicate signals for same window
+    existing = db.get_existing_signal(client, window)
+    if existing:
+        log.info(f"Signal already exists for window {window}, skipping write")
+        return
+
+    # Write signal (always)
+    signal_id = db.write_signal(client, db.SignalRow(
+        market_window_start=window,
+        token_id=sig.market_token_id,
+        decision=sig.decision,
+        final_decision=sig.final_decision,
+        confidence=sig.confidence,
+        score=sig.score,
+        model_probability=sig.model_probability,
+        rsi=sig.rsi,
+        ma_signal=sig.ma_signal,
+        volume_signal=sig.volume_signal,
+        odds=sig.odds,
+        edge_pct=sig.edge_pct,
+        fee_eroded=sig.fee_eroded,
+        suggested_price=sig.suggested_price,
+        minutes_remaining=sig.minutes_remaining,
+        note=sig.note,
+    ))
+
+    # Write paper trade (only if not SKIP)
+    if sig.final_decision != "SKIP":
+        db.write_paper_trade(client, db.PaperTradeRow(
+            signal_id=signal_id,
+            market_window_start=window,
+            token_id=sig.market_token_id,
+            decision=sig.final_decision,
+            odds=sig.odds,
+            score=sig.score,
+            edge_pct=sig.edge_pct,
+            suggested_price=sig.suggested_price,
+        ))
+
+    # Write odds snapshot (every heartbeat tick)
+    if sig.market_token_id and sig.odds > 0:
+        db.write_odds_snapshot(client, sig.market_token_id, sig.odds)
+
+
+def resolve_previous_hour() -> bool:
+    """5.3 — Resolution checker.
+
+    Called by heartbeat once a market hour has closed.
+    Fetches Binance close price, determines outcome, updates paper_trades.
+    Returns True if a trade was resolved.
+    """
+    import db
+
+    client = db.get_client()
+    unresolved = db.get_unresolved_trades(client)
+
+    if not unresolved:
+        return False
+
+    resolved_count = 0
+    for trade in unresolved:
+        window_start = trade.get("market_window_start")
+        if not window_start:
+            continue
+
+        # The hour close time = window_start + 3600000ms
+        hour_close_ms = window_start + 3_600_000
+        hour_close_price_ms = hour_close_ms + 59_999  # end of hour
+
+        # Fetch the Binance candle for that hour
+        try:
+            from data_fetcher import get_binance_klines
+            df = get_binance_klines(
+                symbol="BTCUSDT",
+                interval="1h",
+                start_time=window_start,
+                end_time=hour_close_price_ms,
+                limit=1,
+            )
+            if df is None or len(df) == 0:
+                continue
+
+            hour_open_price = float(df.iloc[0]["open"])
+            hour_close_price = float(df.iloc[0]["close"])
+            actual_outcome = "UP" if hour_close_price > hour_open_price else "DOWN"
+
+            # Determine if trade won
+            trade_decision = trade.get("decision", "")
+            won = (trade_decision == "BET HIGHER" and actual_outcome == "UP") or \
+                  (trade_decision == "BET LOWER" and actual_outcome == "DOWN")
+
+            # Simulate P&L (1% position sizing)
+            odds = trade.get("odds", 0.50)
+            if won:
+                pnl_pct = (1 / odds - 1) * 1.0  # 1% of bankroll
+            else:
+                pnl_pct = -1.0
+
+            db.update_paper_trade_resolution(
+                client,
+                signal_id=trade["signal_id"],
+                resolved_outcome=actual_outcome,
+                simulated_pnl=round(pnl_pct, 4),
+            )
+            resolved_count += 1
+
+        except Exception as e:
+            log.warning(f"Resolution failed for trade signal_id={trade.get('signal_id')}: {e}")
+
+    log.info(f"Resolved {resolved_count}/{len(unresolved)} trades")
+    return resolved_count > 0

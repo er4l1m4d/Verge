@@ -1,8 +1,10 @@
-"""Verge Backend API — Phase 4.4 / 4.5.
+"""Verge Backend API — Phase 4–5.
 
 Flask app exposing:
   GET /api/signal   — live signal (4.4)
   GET /api/health   — health check (4.5)
+  GET /api/heartbeat — heartbeat with persistence (6.1)
+  GET /api/stats    — aggregate stats (5.4)
 """
 import os
 import sys
@@ -13,7 +15,7 @@ from flask_cors import CORS
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from engine import generate_signal
+from engine import generate_signal, persist_signal, resolve_previous_hour
 
 app = Flask(__name__)
 CORS(app)
@@ -70,6 +72,56 @@ def signal():
             "decision": "SKIP",
             "final_decision": "SKIP",
         }), 500
+
+
+@app.route("/api/heartbeat")
+def heartbeat():
+    """6.1 — Heartbeat endpoint.
+
+    Generates signal, persists to Supabase, resolves previous hour.
+    Idempotent: won't duplicate signals for the same market window.
+    """
+    try:
+        sig = generate_signal()
+
+        # Persist to database
+        try:
+            persist_signal(sig)
+        except Exception as e:
+            log.warning(f"Persist failed (non-fatal): {e}")
+
+        # Try to resolve previous hour's trades
+        try:
+            resolve_previous_hour()
+        except Exception as e:
+            log.warning(f"Resolution check failed (non-fatal): {e}")
+
+        return jsonify({
+            "status": "ok",
+            "timestamp": int(time.time()),
+            "decision": sig.final_decision,
+            "market": sig.market_slug,
+            "minutes_remaining": sig.minutes_remaining,
+        })
+    except Exception as e:
+        log.exception("Heartbeat failed")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
+@app.route("/api/stats")
+def stats():
+    """5.4 — Stats endpoint.
+
+    Aggregate stats over paper_trades.
+    """
+    try:
+        import db
+        client = db.get_client()
+        result = db.get_stats(client)
+        return jsonify(result)
+    except Exception as e:
+        log.exception("Stats query failed")
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":

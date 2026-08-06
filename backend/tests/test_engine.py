@@ -161,3 +161,26 @@ class TestFlaskAPI:
         assert "rsi" in data["indicators"]
         assert isinstance(data["market"], dict)
         assert "token_id" in data["market"]
+
+    @patch("data_fetcher.get_binance_klines", side_effect=_mock_binance_klines)
+    @patch("engine.requests.get", side_effect=_mock_clob_responses())
+    def test_heartbeat_endpoint(self, mock_get, mock_klines):
+        client = app.test_client()
+        resp = client.get("/api/heartbeat")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["status"] == "ok"
+        assert "timestamp" in data
+        assert "decision" in data
+        assert "market" in data
+
+    @patch("data_fetcher.get_binance_klines", side_effect=_mock_binance_klines)
+    @patch("engine.requests.get", side_effect=_mock_clob_responses())
+    @patch("app.persist_signal")
+    @patch("app.resolve_previous_hour")
+    def test_heartbeat_calls_persist(self, mock_resolve, mock_persist, mock_get, mock_klines):
+        client = app.test_client()
+        resp = client.get("/api/heartbeat")
+        assert resp.status_code == 200
+        mock_persist.assert_called_once()
+        mock_resolve.assert_called_once()

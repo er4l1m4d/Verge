@@ -316,7 +316,7 @@ service}. 2 unit tests pass.
 **Goal:** the log that turns "a tool that runs" into "a tool with a track
 record."
 
-**5.1 — Schema design**
+**5.1 — Schema design** ✅
 How: Three Supabase tables. `signals`: id, timestamp, market_window_start,
 decision, confidence, score, rsi/ma/volume raw values, odds, fee_adjusted_edge,
 suggested_price, suggested_size. `paper_trades`: references a signal id,
@@ -330,8 +330,11 @@ the subset that were actually BET HIGHER/LOWER, and `odds_snapshots` as the
 raw odds timeline for backtesting.
 Done when: all three tables exist in Supabase with correct types and you can
 manually insert and query a test row from each.
+Status: `SCHEMA_SQL` in `backend/db.py` defines all three tables with indexes.
+Helper classes `SignalRow`, `PaperTradeRow` for type-safe inserts. `odds_snapshots`
+already exists in Supabase from earlier setup.
 
-**5.2 — Write-signal logic**
+**5.2 — Write-signal logic** ✅
 How: Every call to `/api/signal` (or more precisely, every heartbeat-driven
 call — see Phase 6) also inserts a row into `signals`, and if the decision
 isn't SKIP, a corresponding row into `paper_trades`. On every heartbeat tick
@@ -341,8 +344,11 @@ the fine-grained odds history the CLOB API doesn't retain for resolved markets.
 Done when: after a few live signal generations, all three tables show matching
 rows with no missing writes, and `odds_snapshots` has one row per heartbeat
 tick.
+Status: `persist_signal()` in `backend/engine.py` chains `write_signal()`,
+`write_paper_trade()` (if not SKIP), and `write_odds_snapshot()`. Idempotent
+via `get_existing_signal()` check on market_window_start.
 
-**5.3 — Resolution checker**
+**5.3 — Resolution checker** ✅
 How: A function, called by the heartbeat once a market's hour has closed,
 that fetches the actual Binance close price for that hour, determines the
 real outcome, and updates any `paper_trades` row for that window with
@@ -350,14 +356,21 @@ real outcome, and updates any `paper_trades` row for that window with
 sizing to compute a realistic simulated dollar result).
 Done when: an hour that's fully resolved shows a non-null outcome and P&L
 in the database without any manual update.
+Status: `resolve_previous_hour()` in `backend/engine.py`. Queries unresolved
+paper_trades, fetches 1h Binance candle for the trade window, determines
+UP/DOWN outcome, computes simulated P&L (1% sizing), updates via
+`update_paper_trade_resolution()`.
 
-**5.4 — Stats endpoint**
+**5.4 — Stats endpoint** ✅
 How: `GET /api/stats` — aggregate query over `paper_trades`: total count,
 win rate, cumulative simulated ROI. This is what both the dashboard's
 history band and the Phase 9 graduation gate read from — one source, two
 consumers.
 Done when: returns correct aggregate numbers that match a manual count of
 the underlying rows.
+Status: `GET /api/stats` in `backend/app.py`. Calls `db.get_stats()` which
+queries paper_trades and computes total_trades, resolved, wins, losses,
+win_rate, cumulative_pnl.
 
 ---
 
