@@ -119,7 +119,7 @@ Live test deferred to Render (DNS issue locally).
 **Goal:** pure functions, no network calls, fully unit-testable — this is
 the logic both the backtest and the live engine will both call.
 
-**2.1 — RSI function**
+**2.1 — RSI function** ✅
 How: `calculate_rsi(prices, period=14)` — standard Wilder's RSI or simple
 average-gain/average-loss version (either is fine; document which one you
 used, since it affects backtest results if you change it later). Takes a
@@ -127,22 +127,28 @@ price series, returns a single current RSI value.
 Done when: tested against a known reference RSI value (e.g. cross-check one
 output against a chart on TradingView for the same timestamp) within a
 reasonable rounding tolerance.
+Status: Wilder's RSI implemented in `backend/indicators.py`. Handles flat
+prices (returns 50), insufficient data (returns 50), all gains (100),
+all losses (0). 7 unit tests pass.
 
-**2.2 — MA crossover function**
+**2.2 — MA crossover function** ✅
 How: `ma_crossover(prices, fast=5, slow=15)` — compute both moving averages
 over the given windows (in 5-minute bars, so `fast=5` bars ≈ 25 minutes;
 confirm this matches the "5-min / 15-min" framing from the PRD, adjusting
 bar-count vs. minute-count as needed), return `+1`, `-1`, or `0`.
 Done when: returns correct sign against a few hand-picked synthetic price
 series where the trend direction is obvious by eye.
+Status: Simple MA crossover in `backend/indicators.py`. 4 unit tests pass.
 
-**2.3 — Volume spike function**
+**2.3 — Volume spike function** ✅
 How: `volume_spike(current_volume, avg_volume, direction)` — ratio-based,
 returns `+1`/`-1` if ratio ≥ 3.0 in that direction, `0` otherwise, per the
 thresholds already locked in the PRD.
 Done when: unit tests cover the ≥3x, between 2x-3x, and <2x cases correctly.
+Status: Implemented in `backend/indicators.py`. 5 unit tests pass including
+boundary (3.0x = spike) and zero-average edge case.
 
-**2.4 — Weighted scoring function**
+**2.4 — Weighted scoring function** ✅
 How: `score_signal(rsi_val, ma_val, volume_val) -> (score, decision, confidence)`
 combining the three per the PRD's weights (40/25/35) and thresholds
 (±0.6 / ±0.4). This function is the single source of truth for the decision
@@ -151,24 +157,31 @@ this logic to drift out of sync.
 Done when: feeding it the worked example from the PRD (RSI overbought,
 volume spike higher, MA uptrend → total +0.20 → SKIP) reproduces that exact
 result.
+Status: Implemented in `backend/indicators.py`. Also returns model_probability
+(0–1 mapping of score) for fee edge calculation. 5 unit tests pass, PRD
+example verified (score=0.20, decision=SKIP).
 
-**2.5 — Fee-adjusted edge function**
-How: `fee_adjusted_edge(decision, odds_price, shares)` implementing
-`fee = shares * 0.07 * price * (1 - price)`, then comparing the potential
-payout minus fee against the stake to produce an edge percentage. If the
-fee erodes a borderline signal below a minimum viable edge (define this as
-a constant, e.g. 3%), downgrade the decision to SKIP even if the raw score
+**2.5 — Fee-adjusted edge function** ✅
+How: `fee_adjusted_edge(decision, odds_price, model_probability, shares)`
+implementing `fee = shares * 0.07 * price * (1 - price)`, then comparing the
+potential payout minus fee against the stake to produce an edge percentage.
+If the fee erodes a borderline signal below a minimum viable edge (define this
+as a constant, e.g. 3%), downgrade the decision to SKIP even if the raw score
 cleared threshold.
 Done when: a signal with a raw score just above 0.4 but near 50¢ odds (worst
 fee case) correctly downgrades to SKIP, while the same score at 80¢ odds
 (cheap fee zone) does not.
+Status: Implemented in `backend/indicators.py`. Uses model_probability param.
+50¢/weak-signal → SKIP, strong-signal/55¢ → BET HIGHER, negative-edge → SKIP.
+4 unit tests pass.
 
-**2.6 — Unit test suite**
+**2.6 — Unit test suite** ✅
 How: `pytest` covering all five functions above with the hand-checked cases
 already described, plus a couple of edge cases (empty price series, zero
 average volume, RSI on fewer than 14 data points).
 Done when: `pytest backend/tests/` passes with no failures and no skipped
 tests.
+Status: 25 tests in `backend/tests/test_indicators.py`, all passing.
 
 ---
 
