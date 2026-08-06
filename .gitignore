@@ -1,0 +1,18 @@
+# Data folder (cached historical data, not in git)
+data/*
+!data/.gitkeep
+
+# Backend secrets
+backend/.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+venv/
+.env
+
+# Node / frontend
+node_modules/
+dist/
+.next/
