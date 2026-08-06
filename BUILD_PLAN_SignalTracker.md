@@ -11,21 +11,24 @@ working, not just written.
 
 **Goal:** a repo that can hold everything below without restructuring later.
 
-**0.1 — Repo layout**
+**0.1 — Repo layout** ✅
 How: Single Git repo, two top-level folders: `backend/` (Python) and
 `frontend/` (static/React). A third folder, `data/`, holds nothing in git
 except a `.gitkeep` — it's where cached historical data lives locally during
 backtesting and is gitignored.
 Done when: repo pushed to GitHub with this structure and an empty
 `README.md` in each folder.
+Status: Structure complete, commit `ecf3734`. GitHub push deferred — requires
+remote URL before `git remote add origin <url> && git push -u origin master`.
 
-**0.2 — Backend environment**
+**0.2 — Backend environment** ✅
 How: `backend/requirements.txt` with `flask`, `flask-cors`, `requests`,
 `pandas`, `numpy`, `python-telegram-bot`, `supabase` (the Python client),
 `python-dotenv`, `gunicorn`. Create a virtualenv, install, confirm
 `python -c "import flask, pandas, supabase"` runs clean.
 Done when: `pip install -r backend/requirements.txt` succeeds from a fresh
 virtualenv with no errors.
+Status: All 9 packages + deps installed into `backend/venv/`. Import check passes.
 
 **0.3 — Supabase project**
 How: Create a free Supabase project. Note the project URL and anon/service
