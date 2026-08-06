@@ -190,7 +190,7 @@ Status: 25 tests in `backend/tests/test_indicators.py`, all passing.
 **Goal:** know whether the strategy has any real edge before it ever runs
 live. This phase is why Phase 1 and Phase 2 exist.
 
-**3.1 — Directional backtest runner**
+**3.1 — Directional backtest runner** ✅
 How: Loop through every historical hour in the Phase 1 dataset, recompute
 RSI/MA/volume from the 5m data available *as of that hour's open* (careful
 not to leak future data), run it through the Phase 2 scoring function, and
@@ -199,8 +199,12 @@ did. Output a row per hour: decision, actual outcome, correct/incorrect.
 Done when: running this over the full cached dataset produces a results
 table with a computed win rate and a count of how many hours were skipped
 vs. acted on.
+Status: `run_directional_backtest()` in `backend/backtest.py`. Uses
+`_compute_indicators_from_5m()` to ensure no future leakage. Returns full
+results DataFrame with score, RSI, MA, volume, correct, skipped, edge_pct,
+fee_eroded. 6 unit tests pass.
 
-**3.2 — Mispricing backtest runner**
+**3.2 — Mispricing backtest runner** ✅
 How: Same loop, but this time also pull in the Polymarket odds recorded at
 signal-generation time for that historical hour (from Phase 1.3/1.4), and
 score against whether the indicator combination correctly identified a
@@ -209,8 +213,13 @@ tool's thesis, not just "can RSI predict BTC."
 Done when: produces a results table specifically flagging the hours where
 the signal disagreed with market odds, with win rate calculated only on
 those disagreement hours.
+Status: `run_mispricing_backtest()` in `backend/backtest.py`. Accepts
+odds_snapshots DataFrame, finds closest odds to each hour's open (within
+5min window), computes divergence detection (model vs market odds direction).
+Returns empty DataFrame with note when no odds data available. 2 unit tests
+pass.
 
-**3.3 — Backtest report generator**
+**3.3 — Backtest report generator** ✅
 How: A script that takes the results tables from 3.1 and 3.2 and outputs a
 readable summary — win rate, average win size, average loss size, simple
 ROI assuming the PRD's 1-2% position sizing rule, and a plot of cumulative
@@ -219,6 +228,9 @@ fancy).
 Done when: running the report script produces a single readable output
 (printed summary + saved PNG chart) that answers "did this strategy make
 money over the backtest period" without needing to read raw data.
+Status: `generate_report()` in `backend/report.py`. Outputs win rate, avg
+score, edge stats, fee erosion count, ROI estimate, and saves cumulative P&L
+chart as `output/backtest_pnl.png`. 3 unit tests pass.
 
 **3.4 — Threshold sensitivity check** *(optional, do only if 3.3's result
 is borderline rather than clearly positive or clearly negative)*
