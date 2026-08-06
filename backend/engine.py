@@ -46,6 +46,7 @@ def get_current_hourly_market() -> dict | None:
 
     Queries Gamma API for active (unresolved) events in the hourly BTC series.
     Returns dict with keys: token_id, slug, hour_open_time, question.
+    Picks the market whose eventStartTime is most recent but not yet past endDate.
     """
     params = {
         "limit": 20,
@@ -63,7 +64,10 @@ def get_current_hourly_market() -> dict | None:
     if not events:
         return None
 
-    # Pick the first active event with valid tokens
+    now_ms = int(time.time() * 1000)
+    best = None
+    best_start_ms = 0
+
     for event in events:
         for market in event.get("markets", []):
             if market.get("closed", True):
@@ -81,28 +85,38 @@ def get_current_hourly_market() -> dict | None:
             if not tokens:
                 continue
 
-            # Parse hour open time from end_date_iso or question
+            # Parse eventStartTime to find the currently active market
+            event_start = market.get("eventStartTime") or market.get("startDate")
             end_date = market.get("endDate")
-            hour_open_time = None
-            if end_date:
-                # end_date is ISO string, convert to ms timestamp
-                from datetime import datetime, timezone
-                try:
-                    dt = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
-                    # Hour market ends at the hour, open was 1 hour before
-                    hour_open_time = int((dt.timestamp() - 3600) * 1000)
-                except (ValueError, TypeError):
-                    pass
 
-            return {
-                "token_id": tokens[0],
-                "slug": event.get("slug", ""),
-                "question": market.get("question", ""),
-                "hour_open_time": hour_open_time,
-                "market_id": market.get("id"),
-            }
+            if not event_start or not end_date:
+                continue
 
-    return None
+            from datetime import datetime, timezone
+            try:
+                start_dt = datetime.fromisoformat(event_start.replace("Z", "+00:00"))
+                end_dt = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
+                start_ms = int(start_dt.timestamp() * 1000)
+                end_ms = int(end_dt.timestamp() * 1000)
+            except (ValueError, TypeError):
+                continue
+
+            # Must be currently active (now between start and end)
+            if now_ms < start_ms or now_ms >= end_ms:
+                continue
+
+            # Pick the one with the latest start time (most recent hour)
+            if start_ms > best_start_ms:
+                best_start_ms = start_ms
+                best = {
+                    "token_id": tokens[0],
+                    "slug": event.get("slug", ""),
+                    "question": market.get("question", ""),
+                    "hour_open_time": start_ms,
+                    "market_id": market.get("id"),
+                }
+
+    return best
 
 
 def get_current_odds(token_id: str) -> float | None:
