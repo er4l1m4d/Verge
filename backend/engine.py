@@ -56,7 +56,7 @@ def get_current_hourly_market() -> dict | None:
         resp = requests.get(f"{GAMMA_API}/events", params=params, timeout=30)
         resp.raise_for_status()
         events = resp.json()
-    except requests.exceptions.RequestException as e:
+    except Exception as e:
         log.warning(f"Gamma API request failed: {e}")
         return None
 
@@ -153,14 +153,18 @@ def get_current_price_data():
     now_ms = int(_time.time() * 1000)
     start_ms = now_ms - (50 * 5 * 60 * 1000)  # 50 candles back
 
-    df = get_binance_klines(
-        symbol="BTCUSDT",
-        interval="5m",
-        start_time=start_ms,
-        end_time=now_ms,
-        limit=50,
-    )
-    return df if df is not None and len(df) > 0 else None
+    try:
+        df = get_binance_klines(
+            symbol="BTCUSDT",
+            interval="5m",
+            start_time=start_ms,
+            end_time=now_ms,
+            limit=50,
+        )
+        return df if df is not None and len(df) > 0 else None
+    except Exception as e:
+        log.warning(f"Binance price fetch failed: {e}")
+        return None
 
 
 def generate_signal() -> LiveSignal:
@@ -172,6 +176,22 @@ def generate_signal() -> LiveSignal:
         calculate_rsi, ma_crossover, volume_spike,
         score_signal, fee_adjusted_edge,
     )
+
+    try:
+        return _generate_signal_inner()
+    except Exception as e:
+        log.exception("Signal generation failed")
+        return LiveSignal(
+            decision="SKIP", final_decision="SKIP", confidence="none",
+            score=0, model_probability=0.5, rsi=50, ma_signal=0,
+            volume_signal=0, odds=0, edge_pct=0, fee_eroded=False,
+            market_token_id="", market_slug="", suggested_price=None,
+            minutes_remaining=0, hour_open_time=None,
+            note=f"Error: {e}",
+        )
+
+
+def _generate_signal_inner() -> LiveSignal:
 
     # 4.1 — Market discovery
     market = get_current_hourly_market()
