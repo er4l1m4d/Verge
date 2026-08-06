@@ -253,7 +253,7 @@ infrastructure.
 **Goal:** the same scoring logic from Phase 2, now running against live
 data instead of historical data.
 
-**4.1 — Market discovery**
+**4.1 — Market discovery** ✅
 How: `get_current_hourly_market()` — query the Gamma API for the currently
 open hourly BTC market (matching on slug pattern and an active/unresolved
 status), extract its `clobTokenIds` and the hour's official open time.
@@ -262,23 +262,32 @@ minutes within the same hour.
 Done when: calling this function at any point during a live hour returns
 the correct current market and its token IDs, verified by manually
 comparing against what's showing on polymarket.com.
+Status: `get_current_hourly_market()` in `backend/engine.py`. Queries Gamma
+API with `series_slug=btc-up-or-down-hourly, closed=false`. Parses
+clobTokenIds (JSON string), computes hour_open_time from endDate. Returns
+dict with token_id, slug, question, hour_open_time.
 
-**4.2 — Live odds fetcher**
+**4.2 — Live odds fetcher** ✅
 How: `get_current_odds(token_id)` — query the CLOB API for the current
 best price on the relevant token, returning it as an implied probability
 (0-1).
 Done when: the returned value matches what's displayed live on Polymarket's
 market page within a few seconds of latency.
+Status: `get_current_odds()` in `backend/engine.py`. Tries CLOB `/midpoint`
+first, falls back to `/prices-history` with fidelity=1m.
 
-**4.3 — Live price fetcher**
+**4.3 — Live price fetcher** ✅
 How: `get_current_price_data()` — pull the most recent Binance 5m candles
 (enough for RSI-14 and both MAs), plus explicitly fetch and store the
 current hour's open price the moment a new hour starts (needed for
 Phase 6's resolution checker later).
 Done when: returns a DataFrame usable directly by the Phase 2 indicator
 functions with no reshaping needed.
+Status: `get_current_price_data()` in `backend/engine.py`. Calls
+`get_binance_klines(symbol="BTCUSDT", interval="5m")` with 50 candles
+lookback. Returns DataFrame ready for indicator functions.
 
-**4.4 — Signal endpoint**
+**4.4 — Signal endpoint** ✅
 How: Flask route `GET /api/signal` that chains 4.1 → 4.2 → 4.3 → the
 Phase 2 scoring function → Phase 2.5's fee adjustment, and returns one JSON
 object: decision, confidence, score, each indicator's value and
@@ -286,11 +295,19 @@ contribution, current odds, fee-adjusted edge, suggested limit price, and
 minutes remaining in the hour.
 Done when: hitting this endpoint locally returns a complete, correctly
 shaped JSON response using real live data, not mocks.
+Status: `GET /api/signal` in `backend/app.py`. Chains market discovery →
+odds → prices → indicators → scoring → fee edge. Returns full JSON with
+decision, final_decision, confidence, score, model_probability, indicators
+(rsi, ma_signal, volume_signal), market (token_id, slug, hour_open_time,
+minutes_remaining), odds, edge_pct, fee_eroded, suggested_price, note.
+10 unit tests pass (mocked APIs for local testing).
 
-**4.5 — Health endpoint**
+**4.5 — Health endpoint** ✅
 How: `GET /api/health` returning status + timestamp, trivial but needed for
 Phase 6's heartbeat and for confirming the Render deploy is alive.
 Done when: returns 200 with a timestamp that updates on each call.
+Status: `GET /api/health` in `backend/app.py`. Returns {status, timestamp,
+service}. 2 unit tests pass.
 
 ---
 
