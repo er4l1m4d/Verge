@@ -186,11 +186,6 @@ def generate_signal() -> LiveSignal:
 
     Chains: market discovery → odds → prices → indicators → scoring.
     """
-    from indicators import (
-        calculate_rsi, ma_crossover, volume_spike,
-        score_signal, fee_adjusted_edge,
-    )
-
     try:
         return _generate_signal_inner()
     except Exception as e:
@@ -206,6 +201,10 @@ def generate_signal() -> LiveSignal:
 
 
 def _generate_signal_inner() -> LiveSignal:
+    from indicators import (
+        calculate_rsi, ma_crossover, volume_spike,
+        score_signal, fee_adjusted_edge,
+    )
 
     # 4.1 — Market discovery
     market = get_current_hourly_market()
