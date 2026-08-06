@@ -549,6 +549,7 @@ full login system for a one-person tool.
 Done when: hitting any `/api/*` route without the correct secret returns
 401, and the deployed frontend works normally because it's storing and
 sending the secret automatically.
+Status: ✅ Done — `require_secret` decorator on all routes, frontend prompts and stores in localStorage.
 
 **8.5 — End-to-end smoke test**
 How: With everything deployed, watch one full live hour cycle from the
@@ -580,6 +581,7 @@ Supabase on every call. This is the one flag any future Phase 4-of-the-PRD
 work is required to check before exposing any real-order code path.
 Done when: the flag correctly flips based on real data, verified by
 checking it against a manual count/ROI calculation from the database.
+Status: ✅ Done — computed in `db.get_stats()`, returned in `/api/stats` response.
 
 **9.3 — Weekly review habit**
 How: Not code — a lightweight personal checklist: review win rate trend,
