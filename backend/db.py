@@ -233,6 +233,9 @@ def get_stats(client: Client) -> dict:
     # Recent trades for history band (last 10, most recent first)
     recent = resolved[:10] if resolved else []
 
+    # 9.2 — Graduation gate: ≥200 trades AND positive cumulative ROI
+    unlock_real_orders = total >= 200 and cumulative_pnl > 0
+
     return {
         "total_trades": total,
         "resolved": len(resolved),
@@ -240,5 +243,6 @@ def get_stats(client: Client) -> dict:
         "losses": len(losses),
         "win_rate": round(win_rate, 1),
         "cumulative_pnl": round(cumulative_pnl, 2),
+        "unlock_real_orders": unlock_real_orders,
         "recent_trades": recent,
     }
