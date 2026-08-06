@@ -30,12 +30,14 @@ Done when: `pip install -r backend/requirements.txt` succeeds from a fresh
 virtualenv with no errors.
 Status: All 9 packages + deps installed into `backend/venv/`. Import check passes.
 
-**0.3 — Supabase project**
+**0.3 — Supabase project** ✅
 How: Create a free Supabase project. Note the project URL and anon/service
 keys. Don't design the schema yet — that's Phase 5, once you know exactly
 what a signal record needs to contain.
 Done when: you can connect from a local Python script using the `supabase`
 client and successfully run `select 1`.
+Status: Project created, `.env` wired with URL + anon key. `test_supabase.py`
+confirms auth + connection work. Schema deferred to Phase 5.
 
 **0.4 — Environment variables**
 How: `backend/.env` (gitignored) holding `SUPABASE_URL`, `SUPABASE_KEY`,
