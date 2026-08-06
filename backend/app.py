@@ -16,6 +16,7 @@ from flask_cors import CORS
 sys.path.insert(0, os.path.dirname(__file__))
 
 from engine import generate_signal, persist_signal, resolve_previous_hour
+from telegram import alert_on_signal
 
 app = Flask(__name__)
 CORS(app)
@@ -89,6 +90,12 @@ def heartbeat():
             persist_signal(sig)
         except Exception as e:
             log.warning(f"Persist failed (non-fatal): {e}")
+
+        # Telegram alert (only on BET decisions)
+        try:
+            alert_on_signal(sig)
+        except Exception as e:
+            log.warning(f"Telegram alert failed (non-fatal): {e}")
 
         # Try to resolve previous hour's trades
         try:

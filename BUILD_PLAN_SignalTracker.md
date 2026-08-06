@@ -378,7 +378,7 @@ win_rate, cumulative_pnl.
 
 **Goal:** the tool runs itself without you sitting in front of it.
 
-**6.1 — Heartbeat endpoint**
+**6.1 — Heartbeat endpoint** ✅
 How: `GET /api/heartbeat` — calls the Phase 4 signal chain, the Phase 5
 write logic (including odds snapshot capture into `odds_snapshots`), and the
 Phase 5.3 resolution checker (for the *previous* hour, if it just closed) all
@@ -389,16 +389,22 @@ are always appended (no dedup needed — each tick is a unique data point).
 Done when: calling this endpoint repeatedly in a short window produces
 exactly one signal record per market hour, not duplicates, and one odds
 snapshot per tick.
+Status: `GET /api/heartbeat` in `backend/app.py`. Calls generate_signal(),
+persist_signal() (idempotent), resolve_previous_hour(), and alert_on_signal().
+2 unit tests pass.
 
-**6.2 — Telegram bot setup**
+**6.2 — Telegram bot setup** ✅
 How: Create a new bot via BotFather (separate from ARIA), get its token,
 message yourself once manually to get your chat ID. A small
 `send_telegram_alert(message)` function wrapping a plain HTTPS POST to the
 Telegram Bot API's `sendMessage` — no need for `python-telegram-bot`'s
 polling machinery at all in v1, just the raw send call.
 Done when: calling the function sends a real message to your Telegram.
+Status: `backend/telegram.py` with `send_telegram_alert()`, `format_signal_alert()`,
+and `alert_on_signal()`. Uses env vars TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.
+No external dependencies (raw requests.post).
 
-**6.3 — Alert logic**
+**6.3 — Alert logic** ✅
 How: Inside the heartbeat, only call `send_telegram_alert` if the decision
 is BET HIGHER or BET LOWER — never on SKIP, per the PRD (constant SKIP
 pings would just be noise on an hourly-resolving market). Message includes
@@ -406,6 +412,10 @@ direction, confidence, suggested price/size, fee-adjusted edge, and minutes
 remaining.
 Done when: a live BET signal produces exactly one Telegram message with all
 the right fields; a SKIP produces none.
+Status: `alert_on_signal()` in `backend/telegram.py`, called from heartbeat
+endpoint. Only fires on BET HIGHER / BET LOWER. HTML-formatted message with
+direction icon, confidence, score, edge, odds, suggested price, indicators,
+market slug, minutes remaining.
 
 **6.4 — External scheduler**
 How: Once deployed (Phase 8), point UptimeRobot or cron-job.org at the live
@@ -413,6 +423,7 @@ How: Once deployed (Phase 8), point UptimeRobot or cron-job.org at the live
 Done when: the log shows heartbeat hits arriving every 5 minutes without
 manual triggering, and Render's service stays awake continuously during
 active hours.
+Status: Pending Phase 8 deployment.
 
 ---
 
