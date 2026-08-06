@@ -348,9 +348,23 @@ let countdownInterval = null;
 let secondsRemaining = 0;
 let lastHeartbeat = 0;
 
+function getSecret() {
+  let s = localStorage.getItem('verge_secret');
+  if (!s) {
+    s = prompt('Enter Verge access secret:');
+    if (s) localStorage.setItem('verge_secret', s);
+  }
+  return s || '';
+}
+
+function authHeaders() {
+  return { 'X-Secret': getSecret() };
+}
+
 async function fetchSignal() {
   try {
-    const resp = await fetch(`${API_BASE}/api/signal`);
+    const resp = await fetch(`${API_BASE}/api/signal`, { headers: authHeaders() });
+    if (resp.status === 401) { localStorage.removeItem('verge_secret'); return null; }
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     return await resp.json();
   } catch (e) {
@@ -361,7 +375,8 @@ async function fetchSignal() {
 
 async function fetchStats() {
   try {
-    const resp = await fetch(`${API_BASE}/api/stats`);
+    const resp = await fetch(`${API_BASE}/api/stats`, { headers: authHeaders() });
+    if (resp.status === 401) { localStorage.removeItem('verge_secret'); return null; }
     if (!resp.ok) return null;
     return await resp.json();
   } catch (e) {

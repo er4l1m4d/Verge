@@ -10,8 +10,9 @@ import os
 import sys
 import logging
 import time
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_cors import CORS
+from functools import wraps
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -25,11 +26,26 @@ VERCEL_URL = os.environ.get("VERCEL_URL", "")
 cors_origins = [f"https://{VERCEL_URL}"] if VERCEL_URL else ["*"]
 CORS(app, origins=cors_origins)
 
+VERGE_SECRET = os.environ.get("VERGE_SECRET", "")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 log = logging.getLogger("verge.api")
 
 
+def require_secret(f):
+    """8.4 — Shared secret check on every /api/* route."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not VERGE_SECRET:
+            return f(*args, **kwargs)
+        provided = request.headers.get("X-Secret") or request.args.get("secret")
+        if provided != VERGE_SECRET:
+            return jsonify({"error": "unauthorized"}), 401
+        return f(*args, **kwargs)
+    return decorated
+
+
 @app.route("/api/health")
+@require_secret
 def health():
     """4.5 — Health endpoint."""
     return jsonify({
@@ -40,6 +56,7 @@ def health():
 
 
 @app.route("/api/signal")
+@require_secret
 def signal():
     """4.4 — Signal endpoint.
 
@@ -82,6 +99,7 @@ def signal():
 
 
 @app.route("/api/heartbeat")
+@require_secret
 def heartbeat():
     """6.1 — Heartbeat endpoint.
 
@@ -122,6 +140,7 @@ def heartbeat():
 
 
 @app.route("/api/stats")
+@require_secret
 def stats():
     """5.4 — Stats endpoint.
 
