@@ -37,7 +37,9 @@ class LiveSignal:
     market_slug: str
     suggested_price: float | None
     minutes_remaining: int
+    seconds_remaining: int
     hour_open_time: int | None
+    hour_end_time: int | None
     note: str | None = None
 
 
@@ -113,6 +115,7 @@ def get_current_hourly_market() -> dict | None:
                     "slug": event.get("slug", ""),
                     "question": market.get("question", ""),
                     "hour_open_time": start_ms,
+                    "hour_end_time": end_ms,
                     "market_id": market.get("id"),
                 }
 
@@ -195,7 +198,8 @@ def generate_signal() -> LiveSignal:
             score=0, model_probability=0.5, rsi=50, ma_signal=0,
             volume_signal=0, odds=0, edge_pct=0, fee_eroded=False,
             market_token_id="", market_slug="", suggested_price=None,
-            minutes_remaining=0, hour_open_time=None,
+            minutes_remaining=0, seconds_remaining=0,
+            hour_open_time=None, hour_end_time=None,
             note=f"Error: {e}",
         )
 
@@ -214,21 +218,25 @@ def _generate_signal_inner() -> LiveSignal:
             score=0, model_probability=0.5, rsi=50, ma_signal=0,
             volume_signal=0, odds=0, edge_pct=0, fee_eroded=False,
             market_token_id="", market_slug="", suggested_price=None,
-            minutes_remaining=0, hour_open_time=None,
+            minutes_remaining=0, seconds_remaining=0,
+            hour_open_time=None, hour_end_time=None,
             note="No active hourly BTC market found",
         )
 
     token_id = market["token_id"]
     slug = market["slug"]
     hour_open_time = market.get("hour_open_time")
+    hour_end_time = market.get("hour_end_time")
 
-    # Compute minutes remaining
-    if hour_open_time:
-        now_ms = int(time.time() * 1000)
-        elapsed_ms = now_ms - hour_open_time
-        minutes_remaining = max(0, 60 - int(elapsed_ms / 60_000))
+    # Compute minutes + seconds remaining using actual end time
+    now_ms = int(time.time() * 1000)
+    if hour_end_time and hour_end_time > now_ms:
+        remaining_ms = hour_end_time - now_ms
+        minutes_remaining = int(remaining_ms / 60_000)
+        seconds_remaining = int((remaining_ms % 60_000) / 1000)
     else:
         minutes_remaining = 0
+        seconds_remaining = 0
 
     # 4.2 — Current odds
     odds = get_current_odds(token_id)
@@ -244,7 +252,8 @@ def _generate_signal_inner() -> LiveSignal:
             volume_signal=0, odds=odds, edge_pct=0, fee_eroded=False,
             market_token_id=token_id, market_slug=slug,
             suggested_price=None, minutes_remaining=minutes_remaining,
-            hour_open_time=hour_open_time,
+            seconds_remaining=seconds_remaining,
+            hour_open_time=hour_open_time, hour_end_time=hour_end_time,
             note="Insufficient price data",
         )
 
@@ -294,7 +303,9 @@ def _generate_signal_inner() -> LiveSignal:
         market_slug=slug,
         suggested_price=suggested_price,
         minutes_remaining=minutes_remaining,
+        seconds_remaining=seconds_remaining,
         hour_open_time=hour_open_time,
+        hour_end_time=hour_end_time,
     )
 
 
