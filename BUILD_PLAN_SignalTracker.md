@@ -39,13 +39,15 @@ client and successfully run `select 1`.
 Status: Project created, `.env` wired with URL + anon key. `test_supabase.py`
 confirms auth + connection work. Schema deferred to Phase 5.
 
-**0.4 — Environment variables**
+**0.4 — Environment variables** ✅
 How: `backend/.env` (gitignored) holding `SUPABASE_URL`, `SUPABASE_KEY`,
 `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`. Load via `python-dotenv` locally;
 these get re-entered as real environment variables in Render's dashboard at
 deploy time (Phase 8), never committed.
 Done when: a local test script reads all four values via `os.environ` with
 no hardcoded secrets anywhere in the codebase.
+Status: All four vars load via `test_env.py`. Grep confirms zero hardcoded
+secrets. Telegram tokens empty (Phase 6).
 
 ---
 
