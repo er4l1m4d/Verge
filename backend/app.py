@@ -131,8 +131,16 @@ def stats():
         result = db.get_stats(client)
         return jsonify(result)
     except Exception as e:
-        log.exception("Stats query failed")
-        return jsonify({"error": str(e)}), 500
+        log.warning(f"Stats query failed (returning defaults): {e}")
+        return jsonify({
+            "total_trades": 0,
+            "resolved": 0,
+            "wins": 0,
+            "losses": 0,
+            "win_rate": 0,
+            "cumulative_pnl": 0,
+            "recent_trades": [],
+        })
 
 
 if __name__ == "__main__":
