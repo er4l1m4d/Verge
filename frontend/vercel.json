@@ -11,8 +11,5 @@
       "src": "/(.*)",
       "dest": "/index.html"
     }
-  ],
-  "env": {
-    "VERGE_API_URL": "@verge-api-url"
-  }
+  ]
 }
