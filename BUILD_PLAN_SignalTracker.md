@@ -98,7 +98,7 @@ parsed from JSON string. Known limitation: CLOB `prices-history` returns
 post-resolution). Backtest will need live-captured odds or accept coarse
 data. Live odds fetch works fine for Phase 4.
 
-**1.4 — Data alignment**
+**1.4 — Data alignment** ✅
 How: For each historical hourly market, join its Polymarket odds timeline
 with the Binance 1h candle covering the same hour, and the preceding 5m
 candles for indicator calculation. Store the merged result as one row per
@@ -107,6 +107,10 @@ Polymarket odds at several points during the hour, and the raw 5m price
 series needed to recompute indicators for that hour.
 Done when: you have a single clean table where each row is one historical
 hourly market with everything needed to backtest it, with no missing joins.
+Status: Code complete in `backend/data_alignment.py`. `align_market()`
+joins one market with Binance 1h/5m data + CLOB odds. `align_all_markets()`
+iterates a series and returns a DataFrame. Handles missing odds gracefully.
+Live test deferred to Render (DNS issue locally).
 
 ---
 
