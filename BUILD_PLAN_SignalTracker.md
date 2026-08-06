@@ -275,22 +275,30 @@ Done when: returns 200 with a timestamp that updates on each call.
 record."
 
 **5.1 — Schema design**
-How: Two Supabase tables. `signals`: id, timestamp, market_window_start,
+How: Three Supabase tables. `signals`: id, timestamp, market_window_start,
 decision, confidence, score, rsi/ma/volume raw values, odds, fee_adjusted_edge,
 suggested_price, suggested_size. `paper_trades`: references a signal id,
 adds resolved_outcome (nullable until the hour closes), simulated_pnl,
-resolved_at. Keep `signals` as the append-only log of every decision, and
-`paper_trades` as the subset that were actually BET HIGHER/LOWER (SKIPs
-don't need a trade record, just a signal record).
-Done when: both tables exist in Supabase with correct types and you can
+resolved_at. `odds_snapshots`: token_id, timestamp, price — append-only log
+of every CLOB odds poll, captured on every heartbeat tick regardless of
+decision. This table builds the fine-grained historical odds data that the
+CLOB API doesn't serve for resolved markets (see Phase 1.3 limitation).
+Keep `signals` as the append-only log of every decision, `paper_trades` as
+the subset that were actually BET HIGHER/LOWER, and `odds_snapshots` as the
+raw odds timeline for backtesting.
+Done when: all three tables exist in Supabase with correct types and you can
 manually insert and query a test row from each.
 
 **5.2 — Write-signal logic**
 How: Every call to `/api/signal` (or more precisely, every heartbeat-driven
 call — see Phase 6) also inserts a row into `signals`, and if the decision
-isn't SKIP, a corresponding row into `paper_trades`.
-Done when: after a few live signal generations, both tables show matching
-rows with no missing writes.
+isn't SKIP, a corresponding row into `paper_trades`. On every heartbeat tick
+(decision and SKIP alike), fetch the current odds from CLOB and insert a row
+into `odds_snapshots` with the token_id, timestamp, and price. This captures
+the fine-grained odds history the CLOB API doesn't retain for resolved markets.
+Done when: after a few live signal generations, all three tables show matching
+rows with no missing writes, and `odds_snapshots` has one row per heartbeat
+tick.
 
 **5.3 — Resolution checker**
 How: A function, called by the heartbeat once a market's hour has closed,
@@ -317,13 +325,15 @@ the underlying rows.
 
 **6.1 — Heartbeat endpoint**
 How: `GET /api/heartbeat` — calls the Phase 4 signal chain, the Phase 5
-write logic, and the Phase 5.3 resolution checker (for the *previous* hour,
-if it just closed) all in one request. Make it idempotent: if called twice
-in quick succession within the same hour, it shouldn't create duplicate
-signal rows — check whether a signal already exists for the current window
-before inserting.
+write logic (including odds snapshot capture into `odds_snapshots`), and the
+Phase 5.3 resolution checker (for the *previous* hour, if it just closed) all
+in one request. Make it idempotent: if called twice in quick succession within
+the same hour, it shouldn't create duplicate signal rows — check whether a
+signal already exists for the current window before inserting. Odds snapshots
+are always appended (no dedup needed — each tick is a unique data point).
 Done when: calling this endpoint repeatedly in a short window produces
-exactly one signal record per market hour, not duplicates.
+exactly one signal record per market hour, not duplicates, and one odds
+snapshot per tick.
 
 **6.2 — Telegram bot setup**
 How: Create a new bot via BotFather (separate from ARIA), get its token,

@@ -149,7 +149,8 @@ discipline mid-session):
 | Binance public REST (klines) | Price history, RSI/MA/volume calculation | None required |
 | Polymarket Gamma API | Discover the live hourly BTC market, get `clobTokenIds` | None required |
 | Polymarket CLOB API | Live odds, order book depth | None required (read-only) |
-| Polymarket CLOB `prices-history` | Historical odds, for the mispricing backtest | None required |
+| Polymarket CLOB `prices-history` | Historical odds, for the mispricing backtest (coarse — resolved markets return 12h granularity only) | None required |
+| Local `odds_snapshots` table | Fine-grained odds history, captured every heartbeat tick (5 min). Builds the high-fidelity dataset the CLOB API doesn't retain. | N/A (local Supabase) |
 | Telegram Bot API | Push alerts | Bot token only |
 
 No API key or secret is ever exposed client-side. All external calls are
