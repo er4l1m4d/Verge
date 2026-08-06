@@ -19,11 +19,7 @@ from engine import generate_signal, persist_signal, resolve_previous_hour
 from telegram import alert_on_signal
 
 app = Flask(__name__)
-
-# CORS: restrict to Vercel frontend in production, allow all in dev
-VERCEL_URL = os.environ.get("VERCEL_URL", "")
-cors_origins = [f"https://{VERCEL_URL}"] if VERCEL_URL else ["*"]
-CORS(app, origins=cors_origins)
+CORS(app)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 log = logging.getLogger("verge.api")
