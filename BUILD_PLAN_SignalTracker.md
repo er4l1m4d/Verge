@@ -55,7 +55,7 @@ secrets. Telegram tokens empty (Phase 6).
 
 **Goal:** the raw material both backtests in Phase 3 depend on.
 
-**1.1 — Binance klines fetcher**
+**1.1 — Binance klines fetcher** ✅
 How: A function `get_binance_klines(symbol, interval, start_time, end_time)`
 that calls Binance's public REST klines endpoint
 (`GET https://api.binance.com/api/v3/klines`) with `symbol=BTCUSDT`,
@@ -66,13 +66,18 @@ market resolves on 1h candles but the indicators run on 5m data.
 Done when: calling the function for a 90-day range returns a complete,
 gap-free DataFrame you can plot and visually sanity-check against a known
 price chart.
+Status: Code complete in `backend/data_fetcher.py`. Handles pagination,
+dedup, type casting, ConnectionError with clear message. Live test deferred
+to Render (local DNS cannot resolve api.binance.com).
 
-**1.2 — Local data cache**
+**1.2 — Local data cache** ✅
 How: Save fetched klines to `data/btc_1h.parquet` and `data/btc_5m.parquet`.
 On each run, check what's already cached and only fetch the missing tail —
 don't re-download 90 days every time you tweak a threshold.
 Done when: a second run of the fetcher completes in under a second because
 it's reading from cache instead of hitting Binance again.
+Status: `fetch_with_cache()`, `load_cache()`, `save_cache()` added to
+`backend/data_fetcher.py`. Uses parquet. Live test deferred to Render.
 
 **1.3 — Polymarket historical odds fetcher**
 How: A function that, given a known market's CLOB token ID, calls the
