@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Verge — BTC Hourly Signal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --void: #0B0D10;
+    --deck: #15181D;
+    --chalk: #E7E9EC;
+    --static: #6B7280;
+    --signal-up: #33C17E;
+    --signal-down: #E24C4C;
+    --idle-slate: #7C8695;
+    --cost-amber: #D6A544;
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: 'Geist Mono', 'JetBrains Mono', monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--void);
+    color: var(--chalk);
+    font-family: var(--font-sans);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .container {
+    max-width: 960px;
+    width: 100%;
+    margin: 0 auto;
+    padding: 0 20px;
+  }
+
+  /* --- Status Band --- */
+  .status-band {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    font-size: 14px;
+  }
+
+  .status-asset {
+    font-family: var(--font-mono);
+    font-weight: 500;
+    color: var(--chalk);
+    letter-spacing: 0.5px;
+  }
+
+  .status-countdown {
+    font-family: var(--font-mono);
+    font-size: 20px;
+    font-weight: 500;
+    color: var(--chalk);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .status-live {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--static);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+
+  .heartbeat-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--signal-up);
+    animation: pulse 3s ease-in-out infinite;
+  }
+
+  .heartbeat-dot.stale {
+    background: var(--signal-down);
+    animation: none;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  /* --- Decision Band --- */
+  .decision-band {
+    text-align: center;
+    padding: 48px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+
+  .decision-label {
+    font-size: 56px;
+    font-weight: 700;
+    letter-spacing: -1px;
+    transition: color 200ms ease;
+  }
+
+  .decision-label.up { color: var(--signal-up); }
+  .decision-label.down { color: var(--signal-down); }
+  .decision-label.skip { color: var(--idle-slate); }
+
+  .decision-meta {
+    margin-top: 12px;
+    font-size: 14px;
+    color: var(--static);
+    font-family: var(--font-mono);
+  }
+
+  .decision-meta span {
+    margin: 0 8px;
+  }
+
+  .confidence-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .confidence-badge.high { background: rgba(51,193,126,0.15); color: var(--signal-up); }
+  .confidence-badge.medium { background: rgba(214,165,68,0.15); color: var(--cost-amber); }
+  .confidence-badge.low { background: rgba(107,114,128,0.15); color: var(--static); }
+
+  /* --- Evidence Band --- */
+  .evidence-band {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1px;
+    background: rgba(255,255,255,0.06);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+
+  .stat-block {
+    background: var(--void);
+    padding: 20px 24px;
+  }
+
+  .stat-label {
+    font-size: 11px;
+    color: var(--static);
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    margin-bottom: 8px;
+  }
+
+  .stat-value {
+    font-family: var(--font-mono);
+    font-size: 28px;
+    font-weight: 500;
+    color: var(--chalk);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .stat-contribution {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    margin-top: 4px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .stat-contribution.positive { color: var(--signal-up); }
+  .stat-contribution.negative { color: var(--signal-down); }
+  .stat-contribution.neutral { color: var(--static); }
+
+  /* --- Probability Band --- */
+  .probability-band {
+    padding: 24px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+
+  .odds-bar-container {
+    position: relative;
+    height: 6px;
+    background: rgba(255,255,255,0.08);
+    border-radius: 3px;
+    margin: 12px 0;
+  }
+
+  .odds-marker {
+    position: absolute;
+    top: -4px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    transform: translateX(-50%);
+    transition: left 200ms ease;
+  }
+
+  .odds-marker.market {
+    background: var(--chalk);
+  }
+
+  .odds-marker.indicator {
+    background: var(--cost-amber);
+    border: 2px solid var(--void);
+  }
+
+  .odds-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--static);
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .probability-details {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 16px;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .edge-value {
+    font-family: var(--font-mono);
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--cost-amber);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .suggested-price {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    color: var(--static);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* --- History Band --- */
+  .history-band {
+    padding: 16px 0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .history-label {
+    font-size: 12px;
+    color: var(--static);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    white-space: nowrap;
+  }
+
+  .history-marks {
+    display: flex;
+    gap: 4px;
+  }
+
+  .history-mark {
+    width: 20px;
+    height: 20px;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 700;
+  }
+
+  .history-mark.up { background: var(--signal-up); color: var(--void); }
+  .history-mark.down { background: var(--signal-down); color: var(--void); }
+  .history-mark.skip { background: var(--idle-slate); color: var(--void); }
+  .history-mark.win { background: var(--signal-up); color: var(--void); }
+  .history-mark.loss { background: var(--signal-down); color: var(--void); }
+
+  .history-winrate {
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--static);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* --- Footer --- */
+  .footer {
+    margin-top: auto;
+    padding: 20px 0;
+    border-top: 1px solid rgba(255,255,255,0.06);
+    font-size: 11px;
+    color: var(--static);
+    text-align: center;
+  }
+
+  .footer a {
+    color: var(--static);
+    text-decoration: none;
+  }
+
+  /* --- Loading --- */
+  .loading {
+    text-align: center;
+    padding: 120px 0;
+    color: var(--static);
+    font-size: 14px;
+  }
+
+  /* --- Error --- */
+  .error-state {
+    text-align: center;
+    padding: 120px 0;
+    color: var(--signal-down);
+    font-size: 14px;
+  }
+
+  /* --- Mobile --- */
+  @media (max-width: 640px) {
+    .decision-label { font-size: 36px; }
+    .evidence-band { grid-template-columns: 1fr; }
+    .stat-block { padding: 16px 20px; }
+    .stat-value { font-size: 22px; }
+    .probability-details { flex-direction: column; align-items: flex-start; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .heartbeat-dot { animation: none; opacity: 1; }
+  }
+</style>
+</head>
+<body>
+
+<div class="container" id="app">
+  <div class="loading">Connecting to Verge...</div>
+</div>
+
+<script>
+const API_BASE = window.location.hostname === 'localhost'
+  ? 'http://localhost:5001'
+  : (window.VERGE_API_URL || 'https://verge-backend.onrender.com');
+
+let countdownInterval = null;
+let minutesRemaining = 0;
+let lastHeartbeat = 0;
+
+async function fetchSignal() {
+  try {
+    const resp = await fetch(`${API_BASE}/api/signal`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return await resp.json();
+  } catch (e) {
+    console.error('Signal fetch failed:', e);
+    return null;
+  }
+}
+
+async function fetchStats() {
+  try {
+    const resp = await fetch(`${API_BASE}/api/stats`);
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (e) {
+    return null;
+  }
+}
+
+function renderDashboard(signal, stats) {
+  if (!signal) {
+    document.getElementById('app').innerHTML = '<div class="error-state">Cannot reach Verge backend</div>';
+    return;
+  }
+
+  const decision = signal.final_decision || 'SKIP';
+  const decisionClass = decision === 'BET HIGHER' ? 'up' : decision === 'BET LOWER' ? 'down' : 'skip';
+  const decisionIcon = decision === 'BET HIGHER' ? '\u25B2' : decision === 'BET LOWER' ? '\u25BC' : '\u2726';
+
+  const confidence = signal.confidence || 'none';
+  const confidenceClass = confidence === 'high' ? 'high' : confidence === 'medium' ? 'medium' : 'low';
+
+  minutesRemaining = signal.market?.minutes_remaining || 0;
+  lastHeartbeat = signal.market?.hour_open_time ? Date.now() : 0;
+
+  const rsiContrib = signal.score > 0
+    ? (signal.indicators?.rsi > 50 ? '+' : '') + ((signal.indicators?.rsi - 50) / 100 * 0.4).toFixed(2)
+    : (signal.indicators?.rsi < 50 ? '' : '+') + ((signal.indicators?.rsi - 50) / 100 * 0.4).toFixed(2);
+
+  const maContrib = signal.indicators?.ma_signal > 0 ? '+0.25' : signal.indicators?.ma_signal < 0 ? '-0.25' : '0.00';
+  const volContrib = signal.indicators?.volume_signal > 0 ? '+0.35' : signal.indicators?.volume_signal < 0 ? '-0.35' : '0.00';
+
+  const oddsPct = ((signal.odds || 0.5) * 100).toFixed(0);
+  const indicatorProb = signal.model_probability ? (signal.model_probability * 100).toFixed(0) : '50';
+
+  const historyMarks = stats?.recent_trades?.slice(0, 10) || [];
+  const winRate = stats?.win_rate || 0;
+
+  const html = `
+    <!-- Status Band -->
+    <div class="status-band">
+      <div class="status-asset">BTC &middot; 1H</div>
+      <div class="status-countdown" id="countdown">${formatCountdown(minutesRemaining)}</div>
+      <div class="status-live">
+        <div class="heartbeat-dot" id="heartbeat-dot"></div>
+        <span>live</span>
+      </div>
+    </div>
+
+    <!-- Decision Band -->
+    <div class="decision-band">
+      <div class="decision-label ${decisionClass}">${decisionIcon} ${decision}</div>
+      <div class="decision-meta">
+        <span class="confidence-badge ${confidenceClass}">${confidence}</span>
+        <span>Score ${signal.score > 0 ? '+' : ''}${(signal.score || 0).toFixed(2)}</span>
+      </div>
+    </div>
+
+    <!-- Evidence Band -->
+    <div class="evidence-band">
+      <div class="stat-block">
+        <div class="stat-label">RSI</div>
+        <div class="stat-value">${(signal.indicators?.rsi || 50).toFixed(1)}</div>
+        <div class="stat-contribution ${rsiContrib > 0 ? 'positive' : rsiContrib < 0 ? 'negative' : 'neutral'}">${rsiContrib > 0 ? '+' : ''}${rsiContrib}</div>
+      </div>
+      <div class="stat-block">
+        <div class="stat-label">Volume</div>
+        <div class="stat-value">${signal.indicators?.volume_signal > 0 ? 'Spike' : signal.indicators?.volume_signal < 0 ? 'Drop' : 'Normal'}</div>
+        <div class="stat-contribution ${volContrib > 0 ? 'positive' : volContrib < 0 ? 'negative' : 'neutral'}">${volContrib}</div>
+      </div>
+      <div class="stat-block">
+        <div class="stat-label">MA Trend</div>
+        <div class="stat-value">${signal.indicators?.ma_signal > 0 ? '\u25B2 Up' : signal.indicators?.ma_signal < 0 ? '\u25BC Down' : '\u2014 Flat'}</div>
+        <div class="stat-contribution ${maContrib > 0 ? 'positive' : maContrib < 0 ? 'negative' : 'neutral'}">${maContrib}</div>
+      </div>
+    </div>
+
+    <!-- Probability Band -->
+    <div class="probability-band">
+      <div class="odds-labels">
+        <span>Odds ${oddsPct}%</span>
+        <span>Indicator ${indicatorProb}%</span>
+      </div>
+      <div class="odds-bar-container">
+        <div class="odds-marker market" style="left: ${oddsPct}%"></div>
+        <div class="odds-marker indicator" style="left: ${indicatorProb}%"></div>
+      </div>
+      <div class="probability-details">
+        <div class="edge-value">Edge after fee: ${signal.edge_pct > 0 ? '+' : ''}${(signal.edge_pct || 0).toFixed(1)}%</div>
+        <div class="suggested-price">${signal.suggested_price ? `Suggested: limit @ ${signal.suggested_price}` : ''}</div>
+      </div>
+    </div>
+
+    <!-- History Band -->
+    <div class="history-band">
+      <div class="history-label">Last 10</div>
+      <div class="history-marks">
+        ${historyMarks.length > 0
+          ? historyMarks.map(t => {
+              const cls = t.resolved_outcome === 'UP' ? 'win' : t.resolved_outcome === 'DOWN' ? 'loss' : 'skip';
+              return `<div class="history-mark ${cls}">${t.resolved_outcome === 'UP' ? '\u25B2' : t.resolved_outcome === 'DOWN' ? '\u25BC' : '\u2014'}</div>`;
+            }).join('')
+          : '<span style="color: var(--static); font-size: 12px;">No trades yet</span>'
+        }
+      </div>
+      <div class="history-winrate">Win ${winRate.toFixed(0)}%</div>
+    </div>
+
+    <!-- Footer -->
+    <div class="footer">
+      Verge &middot; BTC Hourly Signal &middot; Paper trading only
+    </div>
+  `;
+
+  document.getElementById('app').innerHTML = html;
+  startCountdown();
+}
+
+function formatCountdown(minutes) {
+  const m = Math.max(0, Math.floor(minutes));
+  const s = 0;
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')} remaining`;
+}
+
+function startCountdown() {
+  if (countdownInterval) clearInterval(countdownInterval);
+  let secs = minutesRemaining * 60;
+
+  countdownInterval = setInterval(() => {
+    secs = Math.max(0, secs - 1);
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    const el = document.getElementById('countdown');
+    if (el) el.textContent = `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')} remaining`;
+    if (secs <= 0) clearInterval(countdownInterval);
+  }, 1000);
+}
+
+async function poll() {
+  const [signal, stats] = await Promise.all([fetchSignal(), fetchStats()]);
+  renderDashboard(signal, stats);
+}
+
+// Initial load
+poll();
+
+// Poll every 30s (frontend refresh, separate from 5min backend heartbeat)
+setInterval(poll, 30000);
+</script>
+
+</body>
+</html>

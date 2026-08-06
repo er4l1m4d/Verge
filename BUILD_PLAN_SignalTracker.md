@@ -431,7 +431,7 @@ Status: Pending Phase 8 deployment.
 
 **Goal:** VERGE.md instrument surface, built.
 
-**7.1 — Scaffold**
+**7.1 — Scaffold** ✅
 How: A single static page (`frontend/index.html` + vanilla JS, or a minimal
 Vite + React setup if you'd rather — either is fine given how small this UI
 is) that polls `GET /api/signal` and `GET /api/stats` on load and on an
@@ -440,8 +440,10 @@ heartbeat — the frontend polling more often just keeps the countdown and
 odds looking live).
 Done when: the page loads and successfully renders raw JSON data from both
 endpoints, unstyled.
+Status: `frontend/index.html` — single-file vanilla JS app. Polls /api/signal
+and /api/stats every 30s. Auto-detects localhost vs deployed backend.
 
-**7.2 — Status band**
+**7.2 — Status band** ✅
 How: Asset/duration label, a live countdown computed client-side from
 `minutes_remaining` (update every second locally rather than re-polling the
 backend every second), and a heartbeat dot that reflects the timestamp of
@@ -449,8 +451,11 @@ the last successful `/api/heartbeat`-driven signal (pulled from `signals`
 via a small addition to `/api/stats` or a dedicated field).
 Done when: countdown ticks smoothly and the dot visibly changes state if
 the last heartbeat is more than ~10 minutes old.
+Status: Status band with BTC · 1H label, monospace countdown (updates every
+1s), green heartbeat dot with pulse animation. Goes stale (red, no animation)
+if no heartbeat.
 
-**7.3 — Decision band**
+**7.3 — Decision band** ✅
 How: Render the decision label at full color per VERGE.md's token system —
 this is the component where the SKIP-gets-full-conviction principle has to
 actually show up in code, not just get described. Don't conditionally apply
@@ -458,14 +463,20 @@ lower opacity or grayscale to the SKIP state; give it its own full-saturation
 color (`--idle-slate`) and equivalent type weight to the other two states.
 Done when: a visual side-by-side of all three states shows genuinely equal
 visual weight, not a "real" bet look next to a faded placeholder.
+Status: Decision band with 56px bold label. Three states with full-saturation
+colors: --signal-up (#33C17E) for BET HIGHER, --signal-down (#E24C4C) for BET
+LOWER, --idle-slate (#7C8695) for SKIP. Same font weight for all three.
 
-**7.4 — Evidence band**
+**7.4 — Evidence band** ✅
 How: Three stat blocks (RSI/Volume/MA) each showing raw value, sign,
 weighted contribution, matching the wireframe in VERGE.md.
 Done when: values update correctly on each poll and visually match the data
 coming back from `/api/signal`.
+Status: 3-column grid with RSI (value + contribution), Volume (Spike/Drop/Normal
++ contribution), MA Trend (Up/Down/Flat + contribution). Green/red/gray
+contribution colors.
 
-**7.5 — Probability band**
+**7.5 — Probability band** ✅
 How: A horizontal bar showing market odds, with a separate marker for the
 indicator-implied probability (roughly: 50% ± the score's magnitude, or a
 simpler derived value — decide the exact mapping when you build this, it's
@@ -473,13 +484,18 @@ a display concern, not a scoring concern), fee-adjusted edge number in
 `--cost-amber`, and the suggested limit price/size text.
 Done when: the visual gap between the two markers changes correctly as the
 underlying score changes across different signals.
+Status: Odds bar with white market marker and amber indicator marker. Edge
+value in --cost-amber, suggested limit price displayed.
 
-**7.6 — History band**
+**7.6 — History band** ✅
 How: Pull the last 10 records from an extended `/api/stats` response
 (recent trades with outcome), render as a compact strip of colored marks
 plus the running win rate.
 Done when: a completed paper trade appears in this strip on the next poll
 after it resolves.
+Status: History band showing last 10 resolved trades as colored marks
+(green=win, red=loss) plus running win rate percentage. Updated via
+recent_trades from /api/stats.
 
 **7.7 — Styling**
 How: Implement VERGE.md's tokens as CSS custom properties, load Geist

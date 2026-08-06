@@ -219,8 +219,8 @@ def get_unresolved_trades(client: Client) -> list[dict]:
 
 
 def get_stats(client: Client) -> dict:
-    """Aggregate stats over paper_trades."""
-    result = client.table("paper_trades").select("decision, resolved_outcome, simulated_pnl").execute()
+    """Aggregate stats over paper_trades, including recent trades for history band."""
+    result = client.table("paper_trades").select("decision, resolved_outcome, simulated_pnl, market_window_start").order("id", desc=True).execute()
     trades = result.data
 
     total = len(trades)
@@ -230,6 +230,9 @@ def get_stats(client: Client) -> dict:
     cumulative_pnl = sum(t.get("simulated_pnl", 0) for t in resolved)
     win_rate = len(wins) / len(resolved) * 100 if resolved else 0
 
+    # Recent trades for history band (last 10, most recent first)
+    recent = resolved[:10] if resolved else []
+
     return {
         "total_trades": total,
         "resolved": len(resolved),
@@ -237,4 +240,5 @@ def get_stats(client: Client) -> dict:
         "losses": len(losses),
         "win_rate": round(win_rate, 1),
         "cumulative_pnl": round(cumulative_pnl, 2),
+        "recent_trades": recent,
     }
