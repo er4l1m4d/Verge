@@ -79,7 +79,7 @@ it's reading from cache instead of hitting Binance again.
 Status: `fetch_with_cache()`, `load_cache()`, `save_cache()` added to
 `backend/data_fetcher.py`. Uses parquet. Live test deferred to Render.
 
-**1.3 — Polymarket historical odds fetcher**
+**1.3 — Polymarket historical odds fetcher** ✅
 How: A function that, given a known market's CLOB token ID, calls the
 `prices-history` endpoint on the CLOB API to pull historical price (odds)
 points for that token. Since each hourly market is a *separate* market with
@@ -91,6 +91,12 @@ parameters should be checked against Polymarket's current API docs at
 build time — this endpoint has changed shape before.
 Done when: you have historical odds data for at least a handful of past
 hourly BTC markets, timestamped, ready to align against Binance data.
+Status: Code complete in `backend/polymarket_fetcher.py`. Series found:
+`btc-up-or-down-hourly` via Gamma API `series_slug` param. Token IDs
+parsed from JSON string. Known limitation: CLOB `prices-history` returns
+0 points for resolved markets (docs confirm coarse granularity only
+post-resolution). Backtest will need live-captured odds or accept coarse
+data. Live odds fetch works fine for Phase 4.
 
 **1.4 — Data alignment**
 How: For each historical hourly market, join its Polymarket odds timeline
