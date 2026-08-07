@@ -1,9 +1,10 @@
-"""Backtesting Engine — Phase 3.
+"""Backtesting Engine — Phase 3 + Phase 11 (15m).
 
 Runs the indicator+scoring pipeline over historical data to measure
-whether the strategy has a real edge. Two backtests:
-  3.1 — Directional: does the signal predict BTC candle direction?
-  3.2 — Mispricing: does the signal catch Polymarket odds divergences?
+whether the strategy has a real edge. Three backtests:
+  3.1 — Directional (1h): does the signal predict BTC candle direction?
+  3.2 — Mispricing (1h): does the signal catch Polymarket odds divergences?
+ 11.1 — Directional (15m): same approach, 1m bars as Chainlink stand-in.
 """
 import pandas as pd
 import numpy as np
@@ -196,6 +197,115 @@ def run_mispricing_backtest(
             "actual_direction": actual,
             "diverged": diverged,
             "correct_divergence": correct_divergence,
+            "edge_pct": edge.edge_pct,
+        })
+
+    return pd.DataFrame(results)
+
+
+def _compute_indicators_from_1m(
+    df_1m: pd.DataFrame,
+    window_open_time: int,
+    rsi_period: int = 14,
+    ma_fast: int = 5,
+    ma_slow: int = 15,
+    volume_lookback: int = 10,
+) -> tuple[float, int, int]:
+    """Recompute RSI/MA/volume from 1m data available as of window_open_time.
+
+    Uses ONLY data up to window_open_time (no future leakage).
+    Returns (rsi, ma_signal, volume_signal).
+    """
+    candles_up_to = df_1m[df_1m["open_time"] <= window_open_time]
+
+    if len(candles_up_to) < ma_slow:
+        return 50.0, 0, 0
+
+    prices = candles_up_to["close"].tolist()
+    volumes = candles_up_to["volume"].tolist()
+
+    # RSI
+    rsi = calculate_rsi(prices, period=rsi_period)
+
+    # MA crossover
+    ma_sig = ma_crossover(prices, fast=ma_fast, slow=ma_slow)
+
+    # Volume spike
+    if len(volumes) >= volume_lookback + 1:
+        avg_vol = np.mean(volumes[-(volume_lookback + 1):-1])
+        current_vol = volumes[-1]
+        last_candle = candles_up_to.iloc[-1]
+        candle_dir = 1 if last_candle["close"] > last_candle["open"] else -1
+        vol_sig = volume_spike(current_vol, avg_vol, candle_dir)
+    else:
+        vol_sig = 0
+
+    return rsi, ma_sig, vol_sig
+
+
+def run_15m_backtest(
+    df_15m: pd.DataFrame,
+    df_1m: pd.DataFrame,
+    no_bet_final_minutes: int = 3,
+) -> pd.DataFrame:
+    """11.1 — Directional backtest for 15-minute markets.
+
+    Uses Binance 1m klines as a stand-in for Chainlink feed (same caveat
+    as the live volume proxy — correlated but not identical resolution source).
+
+    For each 15m candle:
+      1. Recompute indicators from 1m data available as of window open.
+      2. Skip if within final no-bet minutes.
+      3. Run scoring function -> decision.
+      4. Compare decision against actual candle direction.
+
+    Returns a DataFrame with one row per 15m window.
+    """
+    results = []
+
+    for _, candle in df_15m.iterrows():
+        window_open = int(candle["open_time"])
+        window_close_price = float(candle["close"])
+        window_open_price = float(candle["open"])
+        actual = "UP" if window_close_price > window_open_price else "DOWN"
+
+        # Recompute indicators (no future leakage)
+        rsi, ma_sig, vol_sig = _compute_indicators_from_1m(
+            df_1m, window_open,
+            rsi_period=14, ma_fast=5, ma_slow=15, volume_lookback=10,
+        )
+
+        # Score
+        sig = score_signal(rsi, ma_sig, vol_sig)
+
+        # Fee-adjusted edge (use 0.50 as default odds for directional test)
+        edge = fee_adjusted_edge(sig.decision, 0.50, sig.model_probability)
+
+        # Determine correctness
+        final_dec = edge.final_decision
+        skipped = final_dec == "SKIP"
+        if skipped:
+            correct = None
+        else:
+            correct = (final_dec == "BET HIGHER" and actual == "UP") or \
+                      (final_dec == "BET LOWER" and actual == "DOWN")
+
+        results.append({
+            "window_open_time": window_open,
+            "decision": sig.decision,
+            "final_decision": final_dec,
+            "confidence": sig.confidence,
+            "score": sig.score,
+            "model_prob": sig.model_probability,
+            "rsi": rsi,
+            "ma_signal": ma_sig,
+            "volume_signal": vol_sig,
+            "actual_direction": actual,
+            "window_open": window_open_price,
+            "window_close": window_close_price,
+            "correct": correct,
+            "skipped": skipped,
+            "fee_eroded": edge.fee_eroded,
             "edge_pct": edge.edge_pct,
         })
 

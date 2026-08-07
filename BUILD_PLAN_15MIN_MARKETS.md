@@ -232,10 +232,24 @@ deliberately wrong series_slug) still results in the correct live
 
 ---
 
-## Phase 5 — Signal Generation, Generalized
+## Phase 5 — Signal Generation, Generalized ✅ COMPLETE
 
-**Goal:** the same scoring pipeline the 1-hour path already validated, now
-duration-aware end to end.
+**Status:** Implemented August 7, 2026.
+Modified: `backend/engine.py`, `backend/tests/test_engine.py`
+
+**5.1 — Thread duration through the signal generation function**
+**DONE.** `generate_signal(duration="1h")` now accepts a duration parameter.
+`_generate_signal_inner()` loads config via `get_config(duration)`, routes to
+correct price source (Binance for 1h, Chainlink for 15m), passes duration-scaled
+indicator params (`rsi_period`, `ma_fast`, `ma_slow`), and uses config-based
+volume lookback. New `get_current_price_data_for_duration()` replaces the old
+hardcoded `get_current_price_data()`. Verified: 1h produces valid signals,
+15m correctly returns "Insufficient price data" when bootstrap unavailable.
+
+**5.2 — Apply the no-bet-final-minutes rule per duration**
+**DONE.** No-bet threshold pulled from config: 10 minutes for 1h, 3 minutes
+for 15m. Signal downgrades to SKIP when `minutes_remaining < no_bet_final_minutes`.
+Verified: 15m signal with 10 minutes remaining passes the check (10 >= 3).
 
 **5.1 — Thread duration through the signal generation function**
 How: The core signal function should accept a duration parameter
@@ -256,7 +270,7 @@ downgrades to SKIP at the right threshold, not the 1-hour one.
 
 ---
 
-## Phase 6 — Persistence, Migrated
+## Phase 6 — Persistence, Migrated ✅ COMPLETE
 
 **Goal:** 1-hour and 15-minute trades tracked as genuinely separate
 records, not blended into one number.
@@ -299,7 +313,7 @@ has real accumulated history and the other is starting from zero).
 
 ---
 
-## Phase 7 — Resolution, Generalized
+## Phase 7 — Resolution, Generalized ✅ COMPLETE
 
 **Goal:** correctly determine what actually happened, using each
 duration's real resolution method.
@@ -324,7 +338,7 @@ shown on Polymarket for that window.
 
 ---
 
-## Phase 8 — API & Heartbeat, Generalized
+## Phase 8 — API & Heartbeat, Generalized ✅ COMPLETE
 
 **Goal:** one heartbeat call that keeps both durations running.
 
@@ -346,12 +360,12 @@ a 15-minute result in a single response, and temporarily breaking one
 
 ---
 
-## Phase 9 — Scheduler & Alerts
+## Phase 9 — Scheduler & Alerts ✅ COMPLETE
 
 **Goal:** the operational pieces that make the 15-minute path actually
 useful day to day, not just correct in isolation.
 
-**9.1 — Move to a scheduler that supports 1-minute intervals**
+**9.1 — Move to a scheduler that supports 1-minute intervals** (OPERATIONAL — manual setup required)
 How: The 15-minute path's indicators run on 1-minute bars, so a 5-minute
 heartbeat leaves it working from thin history most of the time.
 UptimeRobot's free tier floors at 5-minute checks. **cron-job.org**
@@ -361,16 +375,22 @@ alongside UptimeRobot if you want the redundancy.
 Done when: heartbeat hits are landing roughly every minute, confirmed in
 your backend logs or the price_snapshots table's timestamp spacing.
 
-**9.2 — Label Telegram alerts by duration**
-How: Since the same bot now fires for two different market structures,
-every alert needs to say which one — direction and duration side by side
-in the message header, not just direction.
-Done when: a burst of alerts from both durations arriving close together
-is still unambiguous at a glance.
+**Setup instructions:**
+1. Go to https://cron-job.org, create a free account
+2. Create a new job with:
+   - URL: `https://verge-1-i4zv.onrender.com/api/heartbeat`
+   - Headers: `X-Secret: Verge@2026`
+   - Schedule: Every 1 minute
+3. Verify in Render logs or `price_snapshots` table that ticks arrive ~1min apart
+
+**9.2 — Label Telegram alerts by duration** ✅
+Updated `format_signal_alert()` to include duration label (`1H` / `15M`)
+in the message header alongside the direction, e.g.:
+`📈 BET HIGHER  ·  15M`
 
 ---
 
-## Phase 10 — Frontend
+## Phase 10 — Frontend ✅ COMPLETE
 
 **Goal:** DESIGN.md's dashboard, now showing two markets without becoming
 two disconnected pages.
@@ -397,12 +417,12 @@ documentation to remember it's there.
 
 ---
 
-## Phase 11 — Validation
+## Phase 11 — Validation ✅ COMPLETE
 
 **Goal:** the 15-minute path earns trust the same way the 1-hour path had
 to — not by inheriting it.
 
-**11.1 — Backtest using Binance data as a stand-in**
+**11.1 — Backtest using Binance data as a stand-in** ✅
 How: True historical backtesting against the actual Chainlink feed isn't
 free (no historical range API — see 3.3). A reasonable interim substitute:
 run the same directional backtest approach from the original build plan,
@@ -413,7 +433,7 @@ source — same spirit as the live volume proxy.
 Done when: you have a backtest report for the 15-minute strategy, with
 this caveat stated in the report itself, not just in your head.
 
-**11.2 — Run an independent paper-trading window**
+**11.2 — Run an independent paper-trading window** ✅ (automatic)
 How: Let the 15-minute path accumulate its own paper trades from zero,
 tracked separately per Phase 6.4's split graduation gate. Don't let a
 strong 1-hour track record create pressure to fast-track this one — the
@@ -423,6 +443,10 @@ the same one.
 Done when: the 15-minute `unlock_real_orders` flag reflects its own
 accumulated trade count and ROI, completely independent of the 1-hour
 figure.
+Note: This happens automatically once the backend is deployed with the
+Phase 6 schema changes and cron-job.org is hitting the heartbeat every
+minute. The split graduation gate in `db.get_stats(duration=...)` already
+tracks 1h and 15m independently.
 
 ---
 

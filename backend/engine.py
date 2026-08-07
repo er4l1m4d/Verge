@@ -45,6 +45,7 @@ class LiveSignal:
     strike_price: float | None = None
     current_price: float | None = None
     note: str | None = None
+    duration: str = "1h"
 
 
 def get_current_market(duration: str = "1h") -> dict | None:
@@ -221,17 +222,31 @@ def get_current_price_data_for_duration(config: dict):
     """Fetch price candles for the given duration's config.
 
     For 1h: Binance 5m candles (existing behavior).
-    For 15m: Chainlink 1m bars via chainlink_fetcher.
+    For 15m: Chainlink 1m bars via chainlink_fetcher, reading cached ticks
+    from price_snapshots table (Phase 7.2b).
     """
     import time as _time
 
     if config["price_source"] == "chainlink":
         # 15m path: use Chainlink on-chain feed + Binance bootstrap
         from chainlink_fetcher import get_chainlink_bars
-        # For now, pass empty ticks — bootstrap from Binance handles warm-up
-        # TODO Phase 6: read cached ticks from price_snapshots table
+
+        # Read cached ticks from price_snapshots table
+        cached_ticks = []
+        try:
+            import db
+            client = db.get_client()
+            since_ms = int(_time.time() * 1000) - (config["bar_lookback"] + 10) * 60_000
+            raw_ticks = db.get_price_snapshots(
+                client, source="chainlink", symbol="BTC",
+                since_ms=since_ms, limit=500,
+            )
+            cached_ticks = [{"timestamp_ms": t["timestamp_ms"], "price": t["price"]} for t in raw_ticks]
+        except Exception as e:
+            log.warning(f"Failed to read cached ticks (non-fatal): {e}")
+
         df = get_chainlink_bars(
-            cached_ticks=[],
+            cached_ticks=cached_ticks,
             interval_ms=60_000,  # 1-minute bars
             min_bars=config["min_candles"],
         )
@@ -276,6 +291,7 @@ def generate_signal(duration: str = "1h") -> LiveSignal:
             minutes_remaining=0, seconds_remaining=0,
             hour_open_time=None, hour_end_time=None,
             note=f"Error: {e}",
+            duration=duration,
         )
 
 
@@ -299,6 +315,7 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
             minutes_remaining=0, seconds_remaining=0,
             hour_open_time=None, hour_end_time=None,
             note=f"No active {duration} BTC market found",
+            duration=duration,
         )
 
     token_id = market["token_id"]
@@ -328,6 +345,7 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
             seconds_remaining=seconds_remaining,
             hour_open_time=hour_open_time, hour_end_time=hour_end_time,
             note=f"SKIP: {minutes_remaining}min remaining < {no_bet_min}min threshold",
+            duration=duration,
         )
 
     # 4.2 — Current odds
@@ -347,6 +365,7 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
             seconds_remaining=seconds_remaining,
             hour_open_time=hour_open_time, hour_end_time=hour_end_time,
             note="Insufficient price data",
+            duration=duration,
         )
 
     # Compute indicators with duration-scaled params
@@ -427,6 +446,7 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
         hour_end_time=hour_end_time,
         strike_price=strike_price,
         current_price=current_price,
+        duration=duration,
     )
 
 
@@ -439,15 +459,16 @@ def persist_signal(sig: LiveSignal) -> None:
     client = db.get_client()
     window = sig.hour_open_time or int(time.time() * 1000) - 3_600_000
 
-    # Check idempotency: don't duplicate signals for same window
-    existing = db.get_existing_signal(client, window)
+    # Check idempotency: don't duplicate signals for same window + duration
+    existing = db.get_existing_signal(client, window, duration=sig.duration)
     if existing:
-        log.info(f"Signal already exists for window {window}, skipping write")
+        log.info(f"Signal already exists for window {window} duration={sig.duration}, skipping write")
         return
 
     # Write signal (always)
     signal_id = db.write_signal(client, db.SignalRow(
         market_window_start=window,
+        market_duration=sig.duration,
         token_id=sig.market_token_id,
         decision=sig.decision,
         final_decision=sig.final_decision,
@@ -472,6 +493,7 @@ def persist_signal(sig: LiveSignal) -> None:
         db.write_paper_trade(client, db.PaperTradeRow(
             signal_id=signal_id,
             market_window_start=window,
+            market_duration=sig.duration,
             token_id=sig.market_token_id,
             decision=sig.final_decision,
             odds=sig.odds,
@@ -485,17 +507,64 @@ def persist_signal(sig: LiveSignal) -> None:
         db.write_odds_snapshot(client, sig.market_token_id, sig.odds)
 
 
-def resolve_previous_hour() -> bool:
-    """5.3 — Resolution checker.
+def record_price_tick(duration: str = "15m") -> bool:
+    """Record the current Chainlink price tick to price_snapshots (Phase 7.2a).
 
-    Called by heartbeat once a market hour has closed.
-    Fetches Binance close price, determines outcome, updates paper_trades.
+    Called on every heartbeat for 15m duration to accumulate ticks
+    for tick-based resolution and bar-building.
+
+    Returns True if a tick was written, False on failure.
+    """
+    if duration != "15m":
+        return False
+
+    try:
+        from chainlink_fetcher import get_chainlink_price
+        import db
+
+        price = get_chainlink_price()
+        if price is None:
+            log.warning("Cannot record tick: Chainlink price unavailable")
+            return False
+
+        client = db.get_client()
+        db.write_price_snapshot(
+            client,
+            db.PriceSnapshotRow(
+                source="chainlink",
+                symbol="BTC",
+                timestamp_ms=int(time.time() * 1000),
+                price=price,
+            ),
+        )
+        log.info(f"Recorded Chainlink tick: ${price:,.2f}")
+        return True
+
+    except Exception as e:
+        log.warning(f"Price tick recording failed: {e}")
+        return False
+
+
+def resolve_previous_hour(duration: str = "1h") -> bool:
+    """5.3 + Phase 7.2c — Resolution checker (duration-aware).
+
+    Called by heartbeat once a market window has closed.
+    Fetches price data, determines outcome, updates paper_trades.
     Returns True if a trade was resolved.
+
+    Resolution method:
+      - 1h: Binance candle open/close (unchanged)
+      - 15m: Tick-based from price_snapshots table (Chainlink ticks).
+             Falls back to Coinbase candles if insufficient ticks.
     """
     import db
+    from market_config import get_config
+
+    config = get_config(duration)
+    window_ms = config["window"]
 
     client = db.get_client()
-    unresolved = db.get_unresolved_trades(client)
+    unresolved = db.get_unresolved_trades(client, duration=duration)
 
     if not unresolved:
         return False
@@ -506,26 +575,66 @@ def resolve_previous_hour() -> bool:
         if not window_start:
             continue
 
-        # The hour close time = window_start + 3600000ms
-        hour_close_ms = window_start + 3_600_000
-        hour_close_price_ms = hour_close_ms + 59_999  # end of hour
+        close_ms = window_start + window_ms
 
-        # Fetch the Binance candle for that hour
         try:
-            from data_fetcher import get_binance_klines
-            df = get_binance_klines(
-                symbol="BTCUSDT",
-                interval="1h",
-                start_time=window_start,
-                end_time=hour_close_price_ms,
-                limit=1,
-            )
-            if df is None or len(df) == 0:
-                continue
+            if duration == "15m":
+                # 7.2c: Tick-based resolution from price_snapshots
+                ticks = db.get_price_snapshots(
+                    client, source="chainlink", symbol="BTC",
+                    since_ms=window_start, limit=1000,
+                )
+                # Filter ticks within the window
+                window_ticks = [t for t in ticks if t["timestamp_ms"] <= close_ms]
 
-            hour_open_price = float(df.iloc[0]["open"])
-            hour_close_price = float(df.iloc[0]["close"])
-            actual_outcome = "UP" if hour_close_price > hour_open_price else "DOWN"
+                if len(window_ticks) >= 2:
+                    # Use first tick as open, last tick as close
+                    open_price = float(window_ticks[0]["price"])
+                    close_price = float(window_ticks[-1]["price"])
+                    actual_outcome = "UP" if close_price > open_price else "DOWN"
+                    log.info(
+                        f"15m resolution via ticks: open=${open_price:,.2f} "
+                        f"close=${close_price:,.2f} -> {actual_outcome} "
+                        f"({len(window_ticks)} ticks)"
+                    )
+                else:
+                    # 7.2d: Fallback to Coinbase candles if insufficient ticks
+                    log.info(
+                        f"Insufficient ticks for 15m resolution "
+                        f"({len(window_ticks)} ticks), falling back to Coinbase"
+                    )
+                    from data_fetcher import get_coinbase_candles
+                    df = get_coinbase_candles(
+                        product_id="BTC-USD",
+                        granularity=config["candle_interval"],
+                        start_ms=window_start,
+                        end_ms=close_ms,
+                    )
+                    if df is None or len(df) == 0:
+                        log.warning(f"No Coinbase data for 15m resolution, skipping")
+                        continue
+                    open_price = float(df.iloc[0]["open"])
+                    close_price = float(df.iloc[0]["close"])
+                    actual_outcome = "UP" if close_price > open_price else "DOWN"
+                    log.info(
+                        f"15m resolution via Coinbase fallback: "
+                        f"open=${open_price:,.2f} close=${close_price:,.2f} -> {actual_outcome}"
+                    )
+            else:
+                # 1h: use Binance (existing behavior, unchanged)
+                from data_fetcher import get_binance_klines
+                df = get_binance_klines(
+                    symbol="BTCUSDT",
+                    interval="1h",
+                    start_time=window_start,
+                    end_time=close_ms,
+                    limit=1,
+                )
+                if df is None or len(df) == 0:
+                    continue
+                open_price = float(df.iloc[0]["open"])
+                close_price = float(df.iloc[0]["close"])
+                actual_outcome = "UP" if close_price > open_price else "DOWN"
 
             # Determine if trade won
             trade_decision = trade.get("decision", "")
@@ -535,7 +644,7 @@ def resolve_previous_hour() -> bool:
             # Simulate P&L (1% position sizing)
             odds = trade.get("odds", 0.50)
             if won:
-                pnl_pct = (1 / odds - 1) * 1.0  # 1% of bankroll
+                pnl_pct = (1 / odds - 1) * 1.0
             else:
                 pnl_pct = -1.0
 
@@ -550,5 +659,5 @@ def resolve_previous_hour() -> bool:
         except Exception as e:
             log.warning(f"Resolution failed for trade signal_id={trade.get('signal_id')}: {e}")
 
-    log.info(f"Resolved {resolved_count}/{len(unresolved)} trades")
+    log.info(f"Resolved {resolved_count}/{len(unresolved)} trades (duration={duration})")
     return resolved_count > 0

@@ -157,6 +157,7 @@ class TestFlaskAPI:
         resp = client.get("/api/signal")
         data = resp.get_json()
         assert data["decision"] in ("SKIP", "BET HIGHER", "BET LOWER")
+        assert data["duration"] in ("1h", "15m")
         assert isinstance(data["indicators"], dict)
         assert "rsi" in data["indicators"]
         assert isinstance(data["market"], dict)
@@ -171,8 +172,10 @@ class TestFlaskAPI:
         data = resp.get_json()
         assert data["status"] == "ok"
         assert "timestamp" in data
-        assert "decision" in data
-        assert "market" in data
+        assert "markets" in data
+        assert len(data["markets"]) >= 1
+        assert "decision" in data["markets"][0]
+        assert "duration" in data["markets"][0]
 
     @patch("data_fetcher.get_binance_klines", side_effect=_mock_binance_klines)
     @patch("engine.requests.get", side_effect=_mock_clob_responses())
@@ -182,5 +185,5 @@ class TestFlaskAPI:
         client = app.test_client()
         resp = client.get("/api/heartbeat")
         assert resp.status_code == 200
-        mock_persist.assert_called_once()
-        mock_resolve.assert_called_once()
+        assert mock_persist.call_count >= 1
+        assert mock_resolve.call_count >= 1

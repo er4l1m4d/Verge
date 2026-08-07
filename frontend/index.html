@@ -99,6 +99,52 @@
     50% { opacity: 0.4; }
   }
 
+  /* --- Duration Toggle --- */
+  .duration-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 6px;
+    overflow: hidden;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  .duration-toggle button {
+    background: transparent;
+    border: none;
+    color: var(--static);
+    padding: 5px 10px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: inherit;
+    letter-spacing: inherit;
+    text-transform: inherit;
+    transition: all 0.15s ease;
+  }
+
+  .duration-toggle button.active {
+    background: rgba(255,255,255,0.08);
+    color: var(--chalk);
+  }
+
+  .duration-toggle button:hover:not(.active) {
+    color: var(--chalk);
+    background: rgba(255,255,255,0.04);
+  }
+
+  .approx-note {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--static);
+    opacity: 0.6;
+    letter-spacing: 0.5px;
+    margin-top: 2px;
+  }
+
   /* --- Decision Band --- */
   .decision-band {
     display: flex;
@@ -821,6 +867,24 @@ tutorialNext.addEventListener('click', () => {
   }
 });
 
+// --- Duration Toggle (Phase 10) ---
+let currentDuration = '1h';
+
+function setDuration(dur) {
+  currentDuration = dur;
+  document.getElementById('dur-1h').classList.toggle('active', dur === '1h');
+  document.getElementById('dur-15m').classList.toggle('active', dur === '15m');
+  document.getElementById('status-asset').textContent = `BTC · ${dur === '15m' ? '15M' : '1H'}`;
+
+  // Show/hide approximation note for 15m
+  const noteEl = document.getElementById('approx-note');
+  if (noteEl) noteEl.style.display = dur === '15m' ? 'block' : 'none';
+
+  // Refresh all data with new duration
+  poll();
+  refreshChart();
+}
+
 tutorialBack.addEventListener('click', () => {
   if (currentStep > 0) {
     currentStep--;
@@ -861,7 +925,7 @@ function authHeaders() {
 
 async function fetchSignal() {
   try {
-    const resp = await fetch(`${API_BASE}/api/signal`, { headers: authHeaders() });
+    const resp = await fetch(`${API_BASE}/api/signal?duration=${currentDuration}`, { headers: authHeaders() });
     if (resp.status === 401) { localStorage.removeItem('verge_secret'); return null; }
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     return await resp.json();
@@ -873,7 +937,7 @@ async function fetchSignal() {
 
 async function fetchStats() {
   try {
-    const resp = await fetch(`${API_BASE}/api/stats`, { headers: authHeaders() });
+    const resp = await fetch(`${API_BASE}/api/stats?duration=${currentDuration}`, { headers: authHeaders() });
     if (resp.status === 401) { localStorage.removeItem('verge_secret'); return null; }
     if (!resp.ok) return null;
     return await resp.json();
@@ -884,7 +948,7 @@ async function fetchStats() {
 
 async function fetchCandles() {
   try {
-    const resp = await fetch(`${API_BASE}/api/candles`, { headers: authHeaders() });
+    const resp = await fetch(`${API_BASE}/api/candles?duration=${currentDuration}`, { headers: authHeaders() });
     if (resp.status === 401) { localStorage.removeItem('verge_secret'); return null; }
     if (!resp.ok) return null;
     return await resp.json();
@@ -1135,7 +1199,11 @@ function renderDashboard(signal, stats) {
     <div class="status-band">
       <div class="status-wordmark">VERGE</div>
       <div class="status-right">
-        <div class="status-asset">BTC &middot; 1H</div>
+        <div class="duration-toggle" id="duration-toggle">
+          <button id="dur-1h" class="active" onclick="setDuration('1h')">1H</button>
+          <button id="dur-15m" onclick="setDuration('15m')">15M</button>
+        </div>
+        <div class="status-asset" id="status-asset">BTC · 1H</div>
         <div class="status-live">
           <div class="heartbeat-dot" id="heartbeat-dot"></div>
           <span>live</span>
@@ -1157,6 +1225,7 @@ function renderDashboard(signal, stats) {
           </div>
           <span class="price-delta ${deltaDir}" id="price-delta">${deltaStr}</span>
         </div>
+        <div class="approx-note" id="approx-note" style="display:none;">Chainlink price · Binance volume (approx)</div>
         <div class="chart-row">
           <div class="chart-container">
             <canvas id="price-chart"></canvas>
@@ -1255,6 +1324,14 @@ function renderDashboard(signal, stats) {
   document.getElementById('app').innerHTML = html;
   startCountdown();
   refreshChart();
+
+  // Restore duration toggle state after re-render
+  const dur1h = document.getElementById('dur-1h');
+  const dur15m = document.getElementById('dur-15m');
+  if (dur1h) dur1h.classList.toggle('active', currentDuration === '1h');
+  if (dur15m) dur15m.classList.toggle('active', currentDuration === '15m');
+  const approxNote = document.getElementById('approx-note');
+  if (approxNote) approxNote.style.display = currentDuration === '15m' ? 'block' : 'none';
 }
 
 // Cached chart data — candles refresh every 5s, spot updates every 1.5s

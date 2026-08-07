@@ -44,11 +44,13 @@ def format_signal_alert(sig) -> str:
     """Format a LiveSignal into a Telegram message.
 
     Only called for BET HIGHER / BET LOWER (never SKIP).
+    Includes duration label for multi-market disambiguation (Phase 9.2).
     """
     direction_icon = "📈" if sig.final_decision == "BET HIGHER" else "📉"
+    duration_label = "15M" if getattr(sig, "duration", "1h") == "15m" else "1H"
 
     lines = [
-        f"<b>{direction_icon} {sig.final_decision}</b>",
+        f"<b>{direction_icon} {sig.final_decision}</b>  ·  {duration_label}",
         "",
         f"<b>Confidence:</b> {sig.confidence}",
         f"<b>Score:</b> {sig.score:+.2f}",

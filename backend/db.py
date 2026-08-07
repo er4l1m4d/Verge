@@ -1,14 +1,15 @@
-"""Supabase Persistence Layer — Phase 5.
+"""Supabase Persistence Layer — Phase 5 + 6.
 
 Tables:
   - signals: append-only log of every decision
   - paper_trades: subset that were BET HIGHER/LOWER, with resolution
   - odds_snapshots: raw odds timeline (append-only, every heartbeat tick)
+  - price_snapshots: Chainlink price ticks for 15m bar-building (Phase 6.2)
 """
 import os
 import time
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from supabase import create_client, Client
 
@@ -26,12 +27,13 @@ def get_client() -> Client:
 # --- Schema SQL (for reference / manual setup) ---
 
 SCHEMA_SQL = """
--- Phase 5.1: Schema design
+-- Phase 5.1: Schema design + Phase 6.1: duration column
 
 CREATE TABLE IF NOT EXISTS signals (
     id BIGSERIAL PRIMARY KEY,
     timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     market_window_start BIGINT,
+    market_duration TEXT NOT NULL DEFAULT '1h',
     token_id TEXT,
     decision TEXT NOT NULL,
     final_decision TEXT NOT NULL,
@@ -56,6 +58,7 @@ CREATE TABLE IF NOT EXISTS paper_trades (
     signal_id BIGINT REFERENCES signals(id),
     timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     market_window_start BIGINT,
+    market_duration TEXT NOT NULL DEFAULT '1h',
     token_id TEXT,
     decision TEXT NOT NULL,
     odds NUMERIC,
@@ -74,13 +77,26 @@ CREATE TABLE IF NOT EXISTS odds_snapshots (
     price NUMERIC NOT NULL
 );
 
+-- Phase 6.2: Chainlink price ticks for 15m bar-building
+CREATE TABLE IF NOT EXISTS price_snapshots (
+    id BIGSERIAL PRIMARY KEY,
+    source TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    timestamp_ms BIGINT NOT NULL,
+    price NUMERIC NOT NULL
+);
+
 -- Indexes for query performance
 CREATE INDEX IF NOT EXISTS idx_signals_window ON signals(market_window_start);
 CREATE INDEX IF NOT EXISTS idx_signals_token ON signals(token_id);
+CREATE INDEX IF NOT EXISTS idx_signals_duration ON signals(market_duration);
 CREATE INDEX IF NOT EXISTS idx_paper_trades_window ON paper_trades(market_window_start);
 CREATE INDEX IF NOT EXISTS idx_paper_trades_signal ON paper_trades(signal_id);
+CREATE INDEX IF NOT EXISTS idx_paper_trades_duration ON paper_trades(market_duration);
 CREATE INDEX IF NOT EXISTS idx_odds_snapshots_token ON odds_snapshots(token_id);
 CREATE INDEX IF NOT EXISTS idx_odds_snapshots_time ON odds_snapshots(timestamp);
+CREATE INDEX IF NOT EXISTS idx_price_snapshots_time ON price_snapshots(timestamp_ms);
+CREATE INDEX IF NOT EXISTS idx_price_snapshots_source ON price_snapshots(source);
 """
 
 
@@ -107,6 +123,7 @@ class SignalRow:
     strike_price: float | None = None
     current_price: float | None = None
     note: str | None = None
+    market_duration: str = "1h"
 
 
 @dataclass
@@ -120,6 +137,16 @@ class PaperTradeRow:
     score: float
     edge_pct: float
     suggested_price: float | None
+    market_duration: str = "1h"
+
+
+@dataclass
+class PriceSnapshotRow:
+    """A price tick for Chainlink bar-building."""
+    source: str
+    symbol: str
+    timestamp_ms: int
+    price: float
 
 
 # --- Write functions ---
@@ -128,6 +155,7 @@ def write_signal(client: Client, row: SignalRow) -> int:
     """Insert a signal row. Returns the inserted row ID."""
     data = {
         "market_window_start": row.market_window_start,
+        "market_duration": row.market_duration,
         "token_id": row.token_id,
         "decision": row.decision,
         "final_decision": row.final_decision,
@@ -148,7 +176,7 @@ def write_signal(client: Client, row: SignalRow) -> int:
     }
     result = client.table("signals").insert(data).execute()
     row_id = result.data[0]["id"]
-    log.info(f"Wrote signal id={row_id} decision={row.final_decision}")
+    log.info(f"Wrote signal id={row_id} decision={row.final_decision} duration={row.market_duration}")
     return row_id
 
 
@@ -157,6 +185,7 @@ def write_paper_trade(client: Client, row: PaperTradeRow) -> int:
     data = {
         "signal_id": row.signal_id,
         "market_window_start": row.market_window_start,
+        "market_duration": row.market_duration,
         "token_id": row.token_id,
         "decision": row.decision,
         "odds": row.odds,
@@ -166,7 +195,7 @@ def write_paper_trade(client: Client, row: PaperTradeRow) -> int:
     }
     result = client.table("paper_trades").insert(data).execute()
     row_id = result.data[0]["id"]
-    log.info(f"Wrote paper_trade id={row_id} decision={row.decision}")
+    log.info(f"Wrote paper_trade id={row_id} decision={row.decision} duration={row.market_duration}")
     return row_id
 
 
@@ -183,14 +212,27 @@ def write_odds_snapshot(client: Client, token_id: str, price: float) -> int:
     return row_id
 
 
+def write_price_snapshot(client: Client, row: PriceSnapshotRow) -> int:
+    """Append a price tick for Chainlink bar-building. Returns inserted row ID."""
+    data = {
+        "source": row.source,
+        "symbol": row.symbol,
+        "timestamp_ms": row.timestamp_ms,
+        "price": row.price,
+    }
+    result = client.table("price_snapshots").insert(data).execute()
+    return result.data[0]["id"]
+
+
 # --- Query functions ---
 
-def get_existing_signal(client: Client, window_start: int) -> dict | None:
-    """Check if a signal already exists for this market window (idempotency)."""
+def get_existing_signal(client: Client, window_start: int, duration: str = "1h") -> dict | None:
+    """Check if a signal already exists for this market window + duration (idempotency)."""
     result = (
         client.table("signals")
         .select("id")
         .eq("market_window_start", window_start)
+        .eq("market_duration", duration)
         .limit(1)
         .execute()
     )
@@ -213,33 +255,53 @@ def update_paper_trade_resolution(
     log.info(f"Resolved paper_trade signal_id={signal_id} outcome={resolved_outcome} pnl={simulated_pnl}")
 
 
-def get_unresolved_trades(client: Client) -> list[dict]:
-    """Get paper trades that haven't been resolved yet."""
-    result = (
+def get_unresolved_trades(client: Client, duration: str | None = None) -> list[dict]:
+    """Get paper trades that haven't been resolved yet.
+
+    Args:
+        duration: if provided, filter to this duration only
+    """
+    query = (
         client.table("paper_trades")
         .select("*")
         .is_("resolved_outcome", "null")
-        .execute()
     )
+    if duration:
+        query = query.eq("market_duration", duration)
+    result = query.execute()
     return result.data
 
 
-def get_recent_signals(client: Client, limit: int = 10) -> list[dict]:
-    """Get the most recent signals (all decisions, including SKIP)."""
-    result = (
+def get_recent_signals(client: Client, limit: int = 10, duration: str | None = None) -> list[dict]:
+    """Get the most recent signals (all decisions, including SKIP).
+
+    Args:
+        duration: if provided, filter to this duration only
+    """
+    query = (
         client.table("signals")
-        .select("final_decision, market_window_start, timestamp, score")
+        .select("final_decision, market_window_start, timestamp, score, market_duration")
         .order("id", desc=True)
-        .limit(limit)
-        .execute()
     )
+    if duration:
+        query = query.eq("market_duration", duration)
+    result = query.limit(limit).execute()
     return result.data
 
 
-def get_stats(client: Client) -> dict:
-    """Aggregate stats over paper_trades, including recent trades for history band."""
-    result = client.table("paper_trades").select("decision, resolved_outcome, simulated_pnl, market_window_start").order("id", desc=True).execute()
-    trades = result.data
+def get_stats(client: Client, duration: str | None = None) -> dict:
+    """Aggregate stats over paper_trades, including recent trades for history band.
+
+    Args:
+        duration: if provided, filter to this duration only.
+                  If None, returns combined stats across all durations.
+    """
+    query = client.table("paper_trades").select(
+        "decision, resolved_outcome, simulated_pnl, market_window_start, market_duration"
+    ).order("id", desc=True)
+    if duration:
+        query = query.eq("market_duration", duration)
+    trades = query.execute().data
 
     total = len(trades)
     resolved = [t for t in trades if t.get("resolved_outcome")]
@@ -252,9 +314,9 @@ def get_stats(client: Client) -> dict:
     recent = resolved[:10] if resolved else []
 
     # Recent signals for signal log (all decisions, last 10)
-    recent_signals = get_recent_signals(client, limit=10)
+    recent_signals = get_recent_signals(client, limit=10, duration=duration)
 
-    # 9.2 — Graduation gate: ≥200 trades AND positive cumulative ROI
+    # 6.4 — Graduation gate: ≥200 trades AND positive cumulative ROI (per duration)
     unlock_real_orders = total >= 200 and cumulative_pnl > 0
 
     return {
@@ -268,3 +330,31 @@ def get_stats(client: Client) -> dict:
         "recent_trades": recent,
         "recent_signals": recent_signals,
     }
+
+
+def get_price_snapshots(
+    client: Client,
+    source: str = "chainlink",
+    symbol: str = "BTC",
+    since_ms: int | None = None,
+    limit: int = 1000,
+) -> list[dict]:
+    """Get accumulated price ticks for Chainlink bar-building.
+
+    Args:
+        source: price source filter (e.g. "chainlink")
+        symbol: symbol filter (e.g. "BTC")
+        since_ms: if provided, only return ticks after this timestamp
+        limit: max rows to return
+    """
+    query = (
+        client.table("price_snapshots")
+        .select("timestamp_ms, price")
+        .eq("source", source)
+        .eq("symbol", symbol)
+        .order("timestamp_ms", desc=False)
+    )
+    if since_ms:
+        query = query.gte("timestamp_ms", since_ms)
+    result = query.limit(limit).execute()
+    return result.data

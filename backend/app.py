@@ -17,7 +17,7 @@ from functools import wraps
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from engine import generate_signal, persist_signal, resolve_previous_hour
+from engine import generate_signal, persist_signal, resolve_previous_hour, record_price_tick
 from telegram import alert_on_signal
 
 app = Flask(__name__)
@@ -62,15 +62,18 @@ def signal():
     """4.4 — Signal endpoint.
 
     Returns the full live signal as JSON.
+    Accepts ?duration=1h (default) or ?duration=15m.
     """
     try:
-        sig = generate_signal()
+        duration = request.args.get("duration", "1h")
+        sig = generate_signal(duration=duration)
         return jsonify({
             "decision": sig.decision,
             "final_decision": sig.final_decision,
             "confidence": sig.confidence,
             "score": sig.score,
             "model_probability": sig.model_probability,
+            "duration": sig.duration,
             "indicators": {
                 "rsi": sig.rsi,
                 "ma_signal": sig.ma_signal,
@@ -104,47 +107,89 @@ def signal():
 @app.route("/api/candles")
 @require_secret
 def candles():
-    """Fetch 5m candles for the current hour for the mini-chart.
+    """Fetch candles for the mini-chart.
 
+    Accepts ?duration=1h (default, 5m Binance bars) or ?duration=15m (1m Chainlink/Binance bars).
     Returns candle data + strike price + spot price for real-time chart rendering.
     """
     try:
         import time as _time
-        from data_fetcher import get_price_with_fallback, get_spot_price
+        from data_fetcher import get_spot_price
 
+        duration = request.args.get("duration", "1h")
         now_ms = int(_time.time() * 1000)
-        start_ms = now_ms - (16 * 5 * 60 * 1000)
 
-        df = get_price_with_fallback(
-            symbol="BTCUSDT",
-            interval="5m",
-            start_time=start_ms,
-            end_time=now_ms,
-        )
+        if duration == "15m":
+            # 15m: return 1-minute bars from Chainlink/Binance
+            from market_config import get_config
+            config = get_config("15m")
+            bars_lookback = config.get("bar_lookback", 20)
+            start_ms = now_ms - (bars_lookback + 5) * 60_000
 
-        if df is None or len(df) == 0:
-            return jsonify({"candles": [], "strike": None, "spot": None, "now_ms": now_ms})
+            from engine import get_current_price_data_for_duration
+            df = get_current_price_data_for_duration(config)
 
-        df_hour = df.tail(12)
-        candles_list = []
-        for _, row in df_hour.iterrows():
-            candles_list.append({
-                "time": int(row["open_time"]),
-                "open": round(float(row["open"]), 2),
-                "high": round(float(row["high"]), 2),
-                "low": round(float(row["low"]), 2),
-                "close": round(float(row["close"]), 2),
+            if df is None or len(df) == 0:
+                return jsonify({"candles": [], "strike": None, "spot": None, "now_ms": now_ms, "duration": "15m"})
+
+            df_recent = df.tail(bars_lookback)
+            candles_list = []
+            for _, row in df_recent.iterrows():
+                candles_list.append({
+                    "time": int(row["open_time"]),
+                    "open": round(float(row["open"]), 2),
+                    "high": round(float(row["high"]), 2),
+                    "low": round(float(row["low"]), 2),
+                    "close": round(float(row["close"]), 2),
+                })
+
+            strike = round(float(df_recent.iloc[0]["open"]), 2)
+            spot = get_spot_price()
+
+            return jsonify({
+                "candles": candles_list,
+                "strike": strike,
+                "spot": round(spot, 2) if spot else None,
+                "now_ms": now_ms,
+                "duration": "15m",
             })
+        else:
+            # 1h: return 5-minute Binance candles (existing behavior)
+            from data_fetcher import get_price_with_fallback
 
-        strike = round(float(df_hour.iloc[0]["open"]), 2)
-        spot = get_spot_price()
+            start_ms = now_ms - (16 * 5 * 60 * 1000)
 
-        return jsonify({
-            "candles": candles_list,
-            "strike": strike,
-            "spot": round(spot, 2) if spot else None,
-            "now_ms": now_ms,
-        })
+            df = get_price_with_fallback(
+                symbol="BTCUSDT",
+                interval="5m",
+                start_time=start_ms,
+                end_time=now_ms,
+            )
+
+            if df is None or len(df) == 0:
+                return jsonify({"candles": [], "strike": None, "spot": None, "now_ms": now_ms, "duration": "1h"})
+
+            df_hour = df.tail(12)
+            candles_list = []
+            for _, row in df_hour.iterrows():
+                candles_list.append({
+                    "time": int(row["open_time"]),
+                    "open": round(float(row["open"]), 2),
+                    "high": round(float(row["high"]), 2),
+                    "low": round(float(row["low"]), 2),
+                    "close": round(float(row["close"]), 2),
+                })
+
+            strike = round(float(df_hour.iloc[0]["open"]), 2)
+            spot = get_spot_price()
+
+            return jsonify({
+                "candles": candles_list,
+                "strike": strike,
+                "spot": round(spot, 2) if spot else None,
+                "now_ms": now_ms,
+                "duration": "1h",
+            })
     except Exception as e:
         log.warning(f"Candles fetch failed: {e}")
         return jsonify({"candles": [], "strike": None, "spot": None, "now_ms": int(time.time() * 1000)})
@@ -170,36 +215,56 @@ def spot():
 def heartbeat():
     """6.1 — Heartbeat endpoint.
 
-    Generates signal, persists to Supabase, resolves previous hour.
-    Idempotent: won't duplicate signals for the same market window.
+    Generates signal for each duration (1h + 15m), persists to Supabase,
+    resolves previous windows. Idempotent: won't duplicate signals.
     """
     try:
-        sig = generate_signal()
+        from market_config import supported_durations
 
-        # Persist to database
-        try:
-            persist_signal(sig)
-        except Exception as e:
-            log.warning(f"Persist failed (non-fatal): {e}")
+        results = []
+        for dur in supported_durations():
+            try:
+                sig = generate_signal(duration=dur)
 
-        # Telegram alert (only on BET decisions)
-        try:
-            alert_on_signal(sig)
-        except Exception as e:
-            log.warning(f"Telegram alert failed (non-fatal): {e}")
+                # Persist to database
+                try:
+                    persist_signal(sig)
+                except Exception as e:
+                    log.warning(f"Persist failed for {dur} (non-fatal): {e}")
 
-        # Try to resolve previous hour's trades
-        try:
-            resolve_previous_hour()
-        except Exception as e:
-            log.warning(f"Resolution check failed (non-fatal): {e}")
+                # Record Chainlink price tick for 15m bar-building (Phase 7.2a)
+                if dur == "15m":
+                    try:
+                        record_price_tick(duration=dur)
+                    except Exception as e:
+                        log.warning(f"Price tick recording failed for {dur} (non-fatal): {e}")
+
+                # Telegram alert (only on BET decisions)
+                try:
+                    alert_on_signal(sig)
+                except Exception as e:
+                    log.warning(f"Telegram alert failed for {dur} (non-fatal): {e}")
+
+                # Try to resolve previous window's trades
+                try:
+                    resolve_previous_hour(duration=dur)
+                except Exception as e:
+                    log.warning(f"Resolution check failed for {dur} (non-fatal): {e}")
+
+                results.append({
+                    "duration": dur,
+                    "decision": sig.final_decision,
+                    "market": sig.market_slug,
+                    "minutes_remaining": sig.minutes_remaining,
+                })
+            except Exception as e:
+                log.warning(f"Heartbeat failed for {dur}: {e}")
+                results.append({"duration": dur, "error": str(e)})
 
         return jsonify({
             "status": "ok",
             "timestamp": int(time.time()),
-            "decision": sig.final_decision,
-            "market": sig.market_slug,
-            "minutes_remaining": sig.minutes_remaining,
+            "markets": results,
         })
     except Exception as e:
         log.exception("Heartbeat failed")
@@ -211,12 +276,13 @@ def heartbeat():
 def stats():
     """5.4 — Stats endpoint.
 
-    Aggregate stats over paper_trades.
+    Aggregate stats over paper_trades. Optional ?duration=1h|15m filter.
     """
     try:
         import db
+        duration = request.args.get("duration")
         client = db.get_client()
-        result = db.get_stats(client)
+        result = db.get_stats(client, duration=duration)
         return jsonify(result)
     except Exception as e:
         log.warning(f"Stats query failed (returning defaults): {e}")
