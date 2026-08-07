@@ -201,13 +201,25 @@ def get_coingecko_ohlc(
 
 
 def get_spot_price() -> float | None:
-    """Fetch current BTC-USD spot price from CoinGecko (no key, fast, near-real-time)."""
+    """Fetch current BTC-USD spot price. Fast path first, fallback to CoinGecko."""
+    # Fast path: Coinbase ticker (no key, faster than CoinGecko)
+    try:
+        r = requests.get(
+            "https://api.coinbase.com/v2/prices/BTC-USD/spot",
+            headers=HEADERS,
+            timeout=5,
+        )
+        r.raise_for_status()
+        return float(r.json()["data"]["amount"])
+    except Exception:
+        pass
+    # Fallback: CoinGecko
     try:
         r = requests.get(
             "https://api.coingecko.com/api/v3/simple/price",
             params={"ids": "bitcoin", "vs_currencies": "usd"},
             headers=HEADERS,
-            timeout=10,
+            timeout=5,
         )
         r.raise_for_status()
         return float(r.json()["bitcoin"]["usd"])

@@ -150,6 +150,21 @@ def candles():
         return jsonify({"candles": [], "strike": None, "spot": None, "now_ms": int(time.time() * 1000)})
 
 
+@app.route("/api/spot")
+@require_secret
+def spot():
+    """Ultra-lightweight spot price endpoint for fast polling."""
+    try:
+        from data_fetcher import get_spot_price
+        price = get_spot_price()
+        return jsonify({
+            "spot": round(price, 2) if price else None,
+            "now_ms": int(time.time() * 1000),
+        })
+    except Exception as e:
+        return jsonify({"spot": None, "now_ms": int(time.time() * 1000)})
+
+
 @app.route("/api/heartbeat")
 @require_secret
 def heartbeat():

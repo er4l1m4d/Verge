@@ -893,6 +893,17 @@ async function fetchCandles() {
   }
 }
 
+async function fetchSpot() {
+  try {
+    const resp = await fetch(`${API_BASE}/api/spot`, { headers: authHeaders() });
+    if (resp.status === 401) { localStorage.removeItem('verge_secret'); return null; }
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (e) {
+    return null;
+  }
+}
+
 function drawChart(candles, strike, spot, nowMs) {
   const canvas = document.getElementById('price-chart');
   if (!canvas || !candles || candles.length === 0) return;
@@ -1246,10 +1257,24 @@ function renderDashboard(signal, stats) {
   refreshChart();
 }
 
+// Cached chart data — candles refresh every 5s, spot updates every 1.5s
+let cachedCandles = null;
+let cachedStrike = null;
+
 async function refreshChart() {
   const data = await fetchCandles();
   if (data && data.candles && data.candles.length > 0) {
+    cachedCandles = data.candles;
+    cachedStrike = data.strike;
     drawChart(data.candles, data.strike, data.spot, data.now_ms);
+  }
+}
+
+async function refreshSpot() {
+  if (!cachedCandles) return;
+  const data = await fetchSpot();
+  if (data && data.spot) {
+    drawChart(cachedCandles, cachedStrike, data.spot, data.now_ms);
   }
 }
 
@@ -1283,8 +1308,11 @@ poll();
 // Poll every 30s
 setInterval(poll, 30000);
 
-// Refresh chart every 5s for live price movement
+// Refresh chart every 5s (full candle data)
 setInterval(refreshChart, 5000);
+
+// Fast spot price updates every 1.5s (just redraws with cached candles)
+setInterval(refreshSpot, 1500);
 </script>
 
 </body>
