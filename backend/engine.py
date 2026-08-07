@@ -120,6 +120,23 @@ def get_current_market(duration: str = "1h") -> dict | None:
             # Pick the one with the latest start time (most recent window)
             if start_ms > best_start_ms:
                 best_start_ms = start_ms
+
+                # Extract priceToBeat from event metadata (Polymarket's official strike)
+                metadata = event.get("eventMetadata") or {}
+                price_to_beat = metadata.get("priceToBeat")
+
+                # Extract outcomePrices from market (Polymarket's official odds)
+                # Format: "[\"0.9995\", \"0.0005\"]" — first is "Up" probability
+                outcome_prices_raw = market.get("outcomePrices")
+                up_odds = None
+                if outcome_prices_raw:
+                    try:
+                        prices = json.loads(outcome_prices_raw) if isinstance(outcome_prices_raw, str) else outcome_prices_raw
+                        if prices:
+                            up_odds = float(prices[0])
+                    except (json.JSONDecodeError, IndexError, TypeError):
+                        pass
+
                 best = {
                     "token_id": tokens[0],
                     "slug": event.get("slug", ""),
@@ -127,6 +144,8 @@ def get_current_market(duration: str = "1h") -> dict | None:
                     "window_open": start_ms,
                     "window_end": end_ms,
                     "duration": duration,
+                    "price_to_beat": price_to_beat,
+                    "up_odds": up_odds,
                     # Backward compat — engine.py still uses these names
                     "hour_open_time": start_ms,
                     "hour_end_time": end_ms,
@@ -348,10 +367,12 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
             duration=duration,
         )
 
-    # 4.2 — Current odds
-    odds = get_current_odds(token_id)
+    # 4.2 — Current odds (prefer Gamma API outcomePrices, fallback to CLOB)
+    odds = market.get("up_odds")  # from Gamma API eventMetadata
     if odds is None:
-        odds = 0.50  # fallback to even odds
+        odds = get_current_odds(token_id)  # fallback to CLOB midpoint
+    if odds is None:
+        odds = 0.50  # final fallback
 
     # 4.3 — Price data (duration-aware)
     df_price = get_current_price_data_for_duration(config)
@@ -400,29 +421,19 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
     elif edge.final_decision == "BET LOWER":
         suggested_price = round((1 - odds) * discount, 2)
 
-    # Strike + current price
-    if config["price_source"] == "chainlink":
-        # For Chainlink: strike = first price in the window, current = latest
-        spot = get_spot_price()
-        current_price = spot if spot else (float(df_price.iloc[-1]["close"]) if len(df_price) > 0 else None)
-        strike_price = None
+    # Strike + current price (prefer Polymarket's official priceToBeat)
+    spot = get_spot_price()
+    current_price = spot if spot else (float(df_price.iloc[-1]["close"]) if len(df_price) > 0 else None)
+
+    # Use Polymarket's official strike if available, else compute from candles
+    strike_price = market.get("price_to_beat")
+    if strike_price is None:
+        # Fallback: compute from first candle in window
         if hour_open_time is not None and len(df_price) > 0:
             matching = df_price[df_price["open_time"] >= hour_open_time]
             if len(matching) > 0:
                 strike_price = float(matching.iloc[0]["open"])
             else:
-                strike_price = float(df_price.iloc[0]["open"])
-    else:
-        # Binance path (existing behavior)
-        spot = get_spot_price()
-        current_price = spot if spot else (float(df_price.iloc[-1]["close"]) if len(df_price) > 0 else None)
-        strike_price = None
-        if hour_open_time is not None and current_price is not None:
-            open_ms = hour_open_time
-            matching = df_price[df_price["open_time"] >= open_ms]
-            if len(matching) > 0:
-                strike_price = float(matching.iloc[0]["open"])
-            elif len(df_price) > 0:
                 strike_price = float(df_price.iloc[0]["open"])
 
     return LiveSignal(

@@ -110,21 +110,25 @@ def candles():
     """Fetch candles for the mini-chart.
 
     Accepts ?duration=1h (default, 5m Binance bars) or ?duration=15m (1m Chainlink/Binance bars).
-    Returns candle data + strike price + spot price for real-time chart rendering.
+    Returns candle data + Polymarket's official strike price + spot price.
     """
     try:
         import time as _time
         from data_fetcher import get_spot_price
+        from engine import get_current_market
 
         duration = request.args.get("duration", "1h")
         now_ms = int(_time.time() * 1000)
+
+        # Get official strike from Polymarket
+        market = get_current_market(duration)
+        official_strike = market.get("price_to_beat") if market else None
 
         if duration == "15m":
             # 15m: return 1-minute bars from Chainlink/Binance
             from market_config import get_config
             config = get_config("15m")
             bars_lookback = config.get("bar_lookback", 20)
-            start_ms = now_ms - (bars_lookback + 5) * 60_000
 
             from engine import get_current_price_data_for_duration
             df = get_current_price_data_for_duration(config)
@@ -143,7 +147,7 @@ def candles():
                     "close": round(float(row["close"]), 2),
                 })
 
-            strike = round(float(df_recent.iloc[0]["open"]), 2)
+            strike = round(official_strike, 2) if official_strike else round(float(df_recent.iloc[0]["open"]), 2)
             spot = get_spot_price()
 
             return jsonify({
@@ -180,7 +184,7 @@ def candles():
                     "close": round(float(row["close"]), 2),
                 })
 
-            strike = round(float(df_hour.iloc[0]["open"]), 2)
+            strike = round(official_strike, 2) if official_strike else round(float(df_hour.iloc[0]["open"]), 2)
             spot = get_spot_price()
 
             return jsonify({
