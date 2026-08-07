@@ -71,15 +71,6 @@
     font-size: 14px;
   }
 
-  .status-countdown-decision {
-    font-family: var(--font-mono);
-    font-size: 13px;
-    color: var(--static);
-    font-variant-numeric: tabular-nums;
-    letter-spacing: 0.5px;
-    margin-bottom: 8px;
-  }
-
   .status-live {
     display: flex;
     align-items: center;
@@ -114,6 +105,31 @@
     padding: 48px 0;
     border-bottom: 1px solid rgba(255,255,255,0.06);
   }
+
+  .status-countdown-decision {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: 13px;
+    color: var(--static);
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .status-prices {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--static);
+  }
+
+  .price-strike { opacity: 0.6; }
+
+  .price-current.up { color: var(--signal-up); }
+  .price-current.down { color: var(--signal-down); }
 
   .decision-label {
     font-size: 56px;
@@ -303,6 +319,66 @@
     font-size: 13px;
     color: var(--static);
     font-variant-numeric: tabular-nums;
+  }
+
+  /* --- Signal Log Band --- */
+  .signal-log {
+    padding: 16px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+
+  .signal-log-label {
+    font-size: 12px;
+    color: var(--static);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 12px;
+  }
+
+  .signal-log-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .signal-log-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    background: rgba(255,255,255,0.03);
+    border-radius: 4px;
+    font-size: 13px;
+  }
+
+  .signal-log-hour {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--static);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .signal-log-decision {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: 3px;
+  }
+
+  .signal-log-decision.bet-up {
+    background: rgba(51,193,126,0.15);
+    color: var(--signal-up);
+  }
+
+  .signal-log-decision.bet-down {
+    background: rgba(226,76,76,0.15);
+    color: var(--signal-down);
+  }
+
+  .signal-log-decision.skip {
+    background: rgba(124,134,149,0.15);
+    color: var(--idle-slate);
   }
 
   /* --- Footer --- */
@@ -728,6 +804,14 @@ function renderDashboard(signal, stats) {
   const historyMarks = stats?.recent_trades?.slice(0, 10) || [];
   const winRate = stats?.win_rate || 0;
 
+  const recentSignals = stats?.recent_signals?.slice(0, 10) || [];
+
+  const strikeStr = signal.strike_price ? `$${signal.strike_price.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0})}` : '—';
+  const currentStr = signal.current_price ? `$${signal.current_price.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0})}` : '—';
+  const priceDir = signal.current_price && signal.strike_price
+    ? (signal.current_price > signal.strike_price ? 'up' : signal.current_price < signal.strike_price ? 'down' : '')
+    : '';
+
   const html = `
     <!-- Status Band -->
     <div class="status-band">
@@ -743,7 +827,7 @@ function renderDashboard(signal, stats) {
 
     <!-- Decision Band -->
     <div class="decision-band">
-      <div class="status-countdown-decision" id="countdown">${formatCountdown(secondsRemaining)}</div>
+      <div class="status-countdown-decision" id="countdown">${formatCountdown(secondsRemaining)}<span class="status-prices"><span class="price-strike">Strike ${strikeStr}</span> · <span class="price-current ${priceDir}">Now ${currentStr}</span></span></div>
       <div class="decision-label ${decisionClass}">${decisionIcon} ${decision}</div>
       <div class="decision-meta">
         <span class="confidence-badge ${confidenceClass}">${confidence}</span>
@@ -799,6 +883,24 @@ function renderDashboard(signal, stats) {
         }
       </div>
       <div class="history-winrate">Win ${winRate.toFixed(0)}%</div>
+    </div>
+
+    <!-- Signal Log Band -->
+    <div class="signal-log">
+      <div class="signal-log-label">Signal Log</div>
+      <div class="signal-log-list">
+        ${recentSignals.length > 0
+          ? recentSignals.map(s => {
+              const dt = new Date(s.market_window_start);
+              const hour = dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+              const day = dt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+              const dec = s.final_decision || 'SKIP';
+              const cls = dec === 'BET HIGHER' ? 'bet-up' : dec === 'BET LOWER' ? 'bet-down' : 'skip';
+              return `<div class="signal-log-row"><span class="signal-log-hour">${day} ${hour}</span><span class="signal-log-decision ${cls}">${dec}</span></div>`;
+            }).join('')
+          : '<span style="color: var(--static); font-size: 12px;">No signals yet</span>'
+        }
+      </div>
     </div>
 
     <!-- Footer -->

@@ -46,6 +46,8 @@ CREATE TABLE IF NOT EXISTS signals (
     fee_eroded BOOLEAN DEFAULT FALSE,
     suggested_price NUMERIC,
     minutes_remaining INTEGER,
+    strike_price NUMERIC,
+    current_price NUMERIC,
     note TEXT
 );
 
@@ -102,6 +104,8 @@ class SignalRow:
     fee_eroded: bool
     suggested_price: float | None
     minutes_remaining: int
+    strike_price: float | None = None
+    current_price: float | None = None
     note: str | None = None
 
 
@@ -138,6 +142,8 @@ def write_signal(client: Client, row: SignalRow) -> int:
         "fee_eroded": row.fee_eroded,
         "suggested_price": row.suggested_price,
         "minutes_remaining": row.minutes_remaining,
+        "strike_price": row.strike_price,
+        "current_price": row.current_price,
         "note": row.note,
     }
     result = client.table("signals").insert(data).execute()
@@ -218,6 +224,18 @@ def get_unresolved_trades(client: Client) -> list[dict]:
     return result.data
 
 
+def get_recent_signals(client: Client, limit: int = 10) -> list[dict]:
+    """Get the most recent signals (all decisions, including SKIP)."""
+    result = (
+        client.table("signals")
+        .select("final_decision, market_window_start, timestamp, score")
+        .order("id", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    return result.data
+
+
 def get_stats(client: Client) -> dict:
     """Aggregate stats over paper_trades, including recent trades for history band."""
     result = client.table("paper_trades").select("decision, resolved_outcome, simulated_pnl, market_window_start").order("id", desc=True).execute()
@@ -233,6 +251,9 @@ def get_stats(client: Client) -> dict:
     # Recent trades for history band (last 10, most recent first)
     recent = resolved[:10] if resolved else []
 
+    # Recent signals for signal log (all decisions, last 10)
+    recent_signals = get_recent_signals(client, limit=10)
+
     # 9.2 — Graduation gate: ≥200 trades AND positive cumulative ROI
     unlock_real_orders = total >= 200 and cumulative_pnl > 0
 
@@ -245,4 +266,5 @@ def get_stats(client: Client) -> dict:
         "cumulative_pnl": round(cumulative_pnl, 2),
         "unlock_real_orders": unlock_real_orders,
         "recent_trades": recent,
+        "recent_signals": recent_signals,
     }

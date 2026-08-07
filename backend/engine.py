@@ -40,6 +40,8 @@ class LiveSignal:
     seconds_remaining: int
     hour_open_time: int | None
     hour_end_time: int | None
+    strike_price: float | None = None
+    current_price: float | None = None
     note: str | None = None
 
 
@@ -287,6 +289,18 @@ def _generate_signal_inner() -> LiveSignal:
     elif edge.final_decision == "BET LOWER":
         suggested_price = round((1 - odds) * 0.95, 2)
 
+    # Strike + current price from fetched candles
+    current_price = float(df_5m.iloc[-1]["close"]) if len(df_5m) > 0 else None
+    strike_price = None
+    if hour_open_time is not None and current_price is not None:
+        open_ms = hour_open_time
+        # Find the first candle whose open_time >= hour_open_time
+        matching = df_5m[df_5m["open_time"] >= open_ms]
+        if len(matching) > 0:
+            strike_price = float(matching.iloc[0]["open"])
+        elif len(df_5m) > 0:
+            strike_price = float(df_5m.iloc[0]["open"])
+
     return LiveSignal(
         decision=sig.decision,
         final_decision=edge.final_decision,
@@ -306,6 +320,8 @@ def _generate_signal_inner() -> LiveSignal:
         seconds_remaining=seconds_remaining,
         hour_open_time=hour_open_time,
         hour_end_time=hour_end_time,
+        strike_price=strike_price,
+        current_price=current_price,
     )
 
 
@@ -341,6 +357,8 @@ def persist_signal(sig: LiveSignal) -> None:
         fee_eroded=sig.fee_eroded,
         suggested_price=sig.suggested_price,
         minutes_remaining=sig.minutes_remaining,
+        strike_price=sig.strike_price,
+        current_price=sig.current_price,
         note=sig.note,
     ))
 

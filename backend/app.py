@@ -87,6 +87,8 @@ def signal():
             "edge_pct": sig.edge_pct,
             "fee_eroded": sig.fee_eroded,
             "suggested_price": sig.suggested_price,
+            "strike_price": sig.strike_price,
+            "current_price": sig.current_price,
             "note": sig.note,
         })
     except Exception as e:
