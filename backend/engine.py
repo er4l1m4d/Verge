@@ -13,6 +13,8 @@ from dataclasses import dataclass
 
 sys.path.insert(0, os.path.dirname(__file__))
 
+from market_config import get_config, supported_durations
+
 log = logging.getLogger("verge.engine")
 
 GAMMA_API = "https://gamma-api.polymarket.com"
@@ -45,25 +47,31 @@ class LiveSignal:
     note: str | None = None
 
 
-def get_current_hourly_market() -> dict | None:
-    """4.1 — Find the currently active hourly BTC market on Polymarket.
+def get_current_market(duration: str = "1h") -> dict | None:
+    """4.1 — Find the currently active BTC market for a given duration.
 
-    Queries Gamma API for active (unresolved) events in the hourly BTC series.
-    Returns dict with keys: token_id, slug, hour_open_time, question.
-    Picks the market whose eventStartTime is most recent but not yet past endDate.
+    Queries Gamma API for active (unresolved) events, using the series_slug
+    from market_config. Falls back to slug-prefix matching if the series
+    query returns nothing.
+
+    Args:
+        duration: "1h" or "15m" (keys from market_config.MARKET_CONFIG)
+
+    Returns dict with keys: token_id, slug, question, window_open, window_end,
+    duration. Also includes hour_open_time/hour_end_time for backward compat.
     """
-    params = {
-        "limit": 20,
-        "series_slug": "btc-up-or-down-hourly",
-        "closed": "false",
-    }
-    try:
-        resp = requests.get(f"{GAMMA_API}/events", params=params, timeout=30)
-        resp.raise_for_status()
-        events = resp.json()
-    except Exception as e:
-        log.warning(f"Gamma API request failed: {e}")
-        return None
+    config = get_config(duration)
+    series_slug = config["series_slug"]
+    slug_prefix = config["slug_prefix"]
+    window_ms = config["window_ms"]
+
+    # --- Primary: series_slug query ---
+    events = _fetch_events_by_series(series_slug)
+
+    # --- Fallback: slug-prefix matching ---
+    if not events:
+        log.info(f"Series query empty for '{series_slug}', trying slug-prefix fallback")
+        events = _fetch_events_by_slug_prefix(slug_prefix)
 
     if not events:
         return None
@@ -89,7 +97,6 @@ def get_current_hourly_market() -> dict | None:
             if not tokens:
                 continue
 
-            # Parse eventStartTime to find the currently active market
             event_start = market.get("eventStartTime") or market.get("startDate")
             end_date = market.get("endDate")
 
@@ -109,19 +116,68 @@ def get_current_hourly_market() -> dict | None:
             if now_ms < start_ms or now_ms >= end_ms:
                 continue
 
-            # Pick the one with the latest start time (most recent hour)
+            # Pick the one with the latest start time (most recent window)
             if start_ms > best_start_ms:
                 best_start_ms = start_ms
                 best = {
                     "token_id": tokens[0],
                     "slug": event.get("slug", ""),
                     "question": market.get("question", ""),
+                    "window_open": start_ms,
+                    "window_end": end_ms,
+                    "duration": duration,
+                    # Backward compat — engine.py still uses these names
                     "hour_open_time": start_ms,
                     "hour_end_time": end_ms,
-                    "market_id": market.get("id"),
                 }
 
     return best
+
+
+def _fetch_events_by_series(series_slug: str) -> list:
+    """Fetch events from Gamma API filtered by series_slug."""
+    params = {
+        "limit": 20,
+        "series_slug": series_slug,
+        "closed": "false",
+    }
+    try:
+        resp = requests.get(f"{GAMMA_API}/events", params=params, timeout=30)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        log.warning(f"Gamma API request failed for series '{series_slug}': {e}")
+        return []
+
+
+def _fetch_events_by_slug_prefix(slug_prefix: str) -> list:
+    """4.2 — Fallback: fetch recent events and filter by slug prefix.
+
+    Pulls a broader page of recent events from Gamma (no series filter)
+    and filters client-side for slugs starting with the given prefix.
+    """
+    params = {
+        "limit": 100,
+        "closed": "false",
+        "order": "startDate",
+        "ascending": "false",
+    }
+    try:
+        resp = requests.get(f"{GAMMA_API}/events", params=params, timeout=30)
+        resp.raise_for_status()
+        events = resp.json()
+    except Exception as e:
+        log.warning(f"Gamma API slug-prefix fallback failed: {e}")
+        return []
+
+    # Filter for events whose slug starts with the prefix
+    filtered = [e for e in events if e.get("slug", "").startswith(slug_prefix)]
+    if filtered:
+        log.info(
+            f"Slug-prefix fallback found {len(filtered)} events "
+            f"matching '{slug_prefix}*' (from {len(events)} total)"
+        )
+    return filtered
 
 
 def get_current_odds(token_id: str) -> float | None:
@@ -214,7 +270,7 @@ def _generate_signal_inner() -> LiveSignal:
     from data_fetcher import get_spot_price
 
     # 4.1 — Market discovery
-    market = get_current_hourly_market()
+    market = get_current_market("1h")
     if market is None:
         return LiveSignal(
             decision="SKIP", final_decision="SKIP", confidence="none",

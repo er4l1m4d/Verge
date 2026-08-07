@@ -103,9 +103,34 @@ window was chosen — not just that it was scaled by some fraction of the
 
 ---
 
-## Phase 3 — Chainlink Price Source
+## Phase 3 — Chainlink Price Source ✅ COMPLETE
 
-**Goal:** a working, honest read of the on-chain feed from Phase 1.
+**Status:** Implemented August 7, 2026.
+New module: `backend/chainlink_fetcher.py`. Added `web3>=7,<8` to requirements.txt.
+
+**3.1 — Understand and document the approximation you're accepting**
+**DONE.** Full documentation block in chainlink_fetcher.py explaining:
+Data Streams TWAP 60s (actual resolution) vs on-chain Data Feed (what we read),
+why the gap exists, why it's acceptable (same oracle network, 0.1% deviation),
+and how it compares to the existing CoinGecko-vs-Binance mismatch.
+
+**3.2 — Build the on-chain reader**
+**DONE.** `get_chainlink_price()` reads latestRoundData() from contract
+`0xc907E116054Ad103354f2D350FD2514433D57F6f` via web3.py against RPC
+`polygon-bor-rpc.publicnode.com`. Returns price as float (divides by 10^8).
+Handles: connection failures, stale data warnings (>1hr), non-positive prices.
+Verified: returns real BTC price ($64,815.57).
+
+**3.3 — Decide how to build indicator bars without historical backfill**
+**DONE.** `resample_to_bars()` builds 1-minute OHLC from accumulated price ticks.
+`get_chainlink_bars()` orchestrates: (1) resample cached ticks, (2) if not enough,
+bootstrap from Binance 1m candles. Warm-up period accepted; Binance bootstrap
+eliminates it on Render where Binance is accessible.
+
+**3.4 — Solve the volume gap**
+**DONE.** Volume is proxied from Binance BTC/USDT 1m candles during bootstrap.
+Chainlink ticks have volume=0. The bootstrap path provides real market volume.
+Signal notes will label volume as "Binance proxy" for 15m signals.
 
 **3.1 — Understand and document the approximation you're accepting**
 How: This is a documentation task, not a code task, and it matters. Write
