@@ -211,6 +211,7 @@ def _generate_signal_inner() -> LiveSignal:
         calculate_rsi, ma_crossover, volume_spike,
         score_signal, fee_adjusted_edge,
     )
+    from data_fetcher import get_spot_price
 
     # 4.1 — Market discovery
     market = get_current_hourly_market()
