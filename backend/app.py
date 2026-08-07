@@ -212,7 +212,15 @@ def candles():
                     "close": round(float(row["close"]), 2),
                 })
 
-            strike = round(official_strike, 2) if official_strike else round(float(df_recent.iloc[0]["open"]), 2)
+            # 15m strike: use Gamma priceToBeat if available, else fetch at window start
+            if official_strike:
+                strike = round(official_strike, 2)
+            elif market and market.get("window_open"):
+                from data_fetcher import get_price_at_time
+                strike = get_price_at_time(market["window_open"])
+                strike = round(strike, 2) if strike else round(float(df_recent.iloc[0]["open"]), 2)
+            else:
+                strike = round(float(df_recent.iloc[0]["open"]), 2)
             spot = get_spot_price()
 
             return jsonify({

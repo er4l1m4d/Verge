@@ -274,6 +274,33 @@ def get_coinbase_candles(
     return df
 
 
+def get_price_at_time(target_ms: int) -> float | None:
+    """Get BTC price at a specific time using Coinbase candles.
+
+    Fetches the candle that contains target_ms and returns its open price.
+    Used for 15m market strike when Gamma doesn't provide priceToBeat.
+    """
+    start_s = int(target_ms / 1000) - 300  # 5min before
+    end_s = int(target_ms / 1000) + 300    # 5min after
+    params = {
+        "granularity": 300,
+        "start": datetime.utcfromtimestamp(start_s).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "end": datetime.utcfromtimestamp(end_s).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    try:
+        resp = requests.get(COINBASE_CANDLES_URL, params=params, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        if data:
+            # Coinbase returns [[time, low, high, open, close, volume], ...]
+            # Find candle closest to target
+            best = min(data, key=lambda c: abs(int(c[0]) * 1000 - target_ms))
+            return float(best[3])  # open price
+    except Exception as e:
+        log.warning(f"get_price_at_time failed: {e}")
+    return None
+
+
 def get_price_with_fallback(
     symbol: str,
     interval: str,

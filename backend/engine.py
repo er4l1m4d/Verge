@@ -428,8 +428,14 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
     # Use Polymarket's official strike if available, else compute from candles
     strike_price = market.get("price_to_beat")
     if strike_price is None:
-        # Fallback: compute from first candle in window
-        if hour_open_time is not None and len(df_price) > 0:
+        if duration == "15m" and hour_open_time is not None:
+            # 15m: Gamma doesn't provide priceToBeat — fetch BTC at window start
+            from data_fetcher import get_price_at_time
+            strike_price = get_price_at_time(hour_open_time)
+            if strike_price:
+                log.info(f"15m strike from Coinbase at {hour_open_time}: ${strike_price:,.2f}")
+        elif hour_open_time is not None and len(df_price) > 0:
+            # 1h fallback: compute from first candle in window
             matching = df_price[df_price["open_time"] >= hour_open_time]
             if len(matching) > 0:
                 strike_price = float(matching.iloc[0]["open"])
