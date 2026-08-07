@@ -48,19 +48,36 @@
     font-size: 14px;
   }
 
+  .status-wordmark {
+    font-family: var(--font-mono);
+    font-weight: 500;
+    font-size: 14px;
+    color: var(--chalk);
+    letter-spacing: 3px;
+    text-transform: uppercase;
+  }
+
+  .status-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
   .status-asset {
     font-family: var(--font-mono);
     font-weight: 500;
     color: var(--chalk);
     letter-spacing: 0.5px;
+    font-size: 14px;
   }
 
-  .status-countdown {
+  .status-countdown-decision {
     font-family: var(--font-mono);
-    font-size: 20px;
-    font-weight: 500;
-    color: var(--chalk);
+    font-size: 13px;
+    color: var(--static);
     font-variant-numeric: tabular-nums;
+    letter-spacing: 0.5px;
+    margin-bottom: 8px;
   }
 
   .status-live {
@@ -699,16 +716,19 @@ function renderDashboard(signal, stats) {
   const html = `
     <!-- Status Band -->
     <div class="status-band">
-      <div class="status-asset">BTC &middot; 1H</div>
-      <div class="status-countdown" id="countdown">${formatCountdown(secondsRemaining)}</div>
-      <div class="status-live">
-        <div class="heartbeat-dot" id="heartbeat-dot"></div>
-        <span>live</span>
+      <div class="status-wordmark">VERGE</div>
+      <div class="status-right">
+        <div class="status-asset">BTC &middot; 1H</div>
+        <div class="status-live">
+          <div class="heartbeat-dot" id="heartbeat-dot"></div>
+          <span>live</span>
+        </div>
       </div>
     </div>
 
     <!-- Decision Band -->
     <div class="decision-band">
+      <div class="status-countdown-decision" id="countdown">${formatCountdown(secondsRemaining)}</div>
       <div class="decision-label ${decisionClass}">${decisionIcon} ${decision}</div>
       <div class="decision-meta">
         <span class="confidence-badge ${confidenceClass}">${confidence}</span>
@@ -768,8 +788,12 @@ function renderDashboard(signal, stats) {
 
     <!-- Footer -->
     <div class="footer">
-      Verge &middot; BTC Hourly Signal &middot; Paper trading only &middot; <a href="#" onclick="openTutorialLink(event)">How it works</a>
+      Paper trading only &middot; <a href="#" onclick="openTutorialLink(event)">How it works</a>
     </div>
+  `;
+
+  document.getElementById('app').innerHTML = html;
+  startCountdown();
   `;
 
   document.getElementById('app').innerHTML = html;
