@@ -168,7 +168,7 @@ def get_current_price_data():
     Returns a DataFrame ready for the indicator functions.
     """
     import time as _time
-    from data_fetcher import get_price_with_fallback
+    from data_fetcher import get_price_with_fallback, get_spot_price
 
     now_ms = int(_time.time() * 1000)
     start_ms = now_ms - (50 * 5 * 60 * 1000)  # 50 candles back
@@ -289,8 +289,9 @@ def _generate_signal_inner() -> LiveSignal:
     elif edge.final_decision == "BET LOWER":
         suggested_price = round((1 - odds) * 0.95, 2)
 
-    # Strike + current price from fetched candles
-    current_price = float(df_5m.iloc[-1]["close"]) if len(df_5m) > 0 else None
+    # Strike + current price — use spot price for real-time current
+    spot = get_spot_price()
+    current_price = spot if spot else (float(df_5m.iloc[-1]["close"]) if len(df_5m) > 0 else None)
     strike_price = None
     if hour_open_time is not None and current_price is not None:
         open_ms = hour_open_time

@@ -200,6 +200,22 @@ def get_coingecko_ohlc(
     return df
 
 
+def get_spot_price() -> float | None:
+    """Fetch current BTC-USD spot price from CoinGecko (no key, fast, near-real-time)."""
+    try:
+        r = requests.get(
+            "https://api.coingecko.com/api/v3/simple/price",
+            params={"ids": "bitcoin", "vs_currencies": "usd"},
+            headers=HEADERS,
+            timeout=10,
+        )
+        r.raise_for_status()
+        return float(r.json()["bitcoin"]["usd"])
+    except Exception as e:
+        print(f"[data_fetcher] spot price failed: {e}")
+        return None
+
+
 def get_coinbase_candles(
     granularity: int = 300,
     limit: int = 300,

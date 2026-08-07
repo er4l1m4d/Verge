@@ -806,8 +806,8 @@ function renderDashboard(signal, stats) {
 
   const recentSignals = stats?.recent_signals?.slice(0, 10) || [];
 
-  const strikeStr = signal.strike_price ? `$${signal.strike_price.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0})}` : '—';
-  const currentStr = signal.current_price ? `$${signal.current_price.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0})}` : '—';
+  const strikeStr = signal.strike_price ? `$${signal.strike_price.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : '—';
+  const currentStr = signal.current_price ? `$${signal.current_price.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : '—';
   const priceDir = signal.current_price && signal.strike_price
     ? (signal.current_price > signal.strike_price ? 'up' : signal.current_price < signal.strike_price ? 'down' : '')
     : '';
@@ -827,7 +827,7 @@ function renderDashboard(signal, stats) {
 
     <!-- Decision Band -->
     <div class="decision-band">
-      <div class="status-countdown-decision" id="countdown"><span id="countdown-text">${formatCountdown(secondsRemaining)}</span><span class="status-prices"><span class="price-strike">Strike ${strikeStr}</span> | <span class="price-current ${priceDir}">Now ${currentStr}</span></span></div>
+      <div class="status-countdown-decision" id="countdown"><span class="status-prices"><span class="price-strike">Strike ${strikeStr}</span> | <span class="price-current ${priceDir}">Now ${currentStr}</span></span> · <span id="countdown-text">${formatCountdown(secondsRemaining)}</span></div>
       <div class="decision-label ${decisionClass}">${decisionIcon} ${decision}</div>
       <div class="decision-meta">
         <span class="confidence-badge ${confidenceClass}">${confidence}</span>
