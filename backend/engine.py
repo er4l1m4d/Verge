@@ -217,38 +217,55 @@ def get_current_odds(token_id: str) -> float | None:
     return None
 
 
-def get_current_price_data():
-    """4.3 — Fetch recent 5m candles for indicator computation.
+def get_current_price_data_for_duration(config: dict):
+    """Fetch price candles for the given duration's config.
 
-    Tries Binance first, falls back to CoinGecko if blocked.
-    Returns a DataFrame ready for the indicator functions.
+    For 1h: Binance 5m candles (existing behavior).
+    For 15m: Chainlink 1m bars via chainlink_fetcher.
     """
     import time as _time
-    from data_fetcher import get_price_with_fallback, get_spot_price
 
-    now_ms = int(_time.time() * 1000)
-    start_ms = now_ms - (50 * 5 * 60 * 1000)  # 50 candles back
-
-    try:
-        df = get_price_with_fallback(
-            symbol="BTCUSDT",
-            interval="5m",
-            start_time=start_ms,
-            end_time=now_ms,
+    if config["price_source"] == "chainlink":
+        # 15m path: use Chainlink on-chain feed + Binance bootstrap
+        from chainlink_fetcher import get_chainlink_bars
+        # For now, pass empty ticks — bootstrap from Binance handles warm-up
+        # TODO Phase 6: read cached ticks from price_snapshots table
+        df = get_chainlink_bars(
+            cached_ticks=[],
+            interval_ms=60_000,  # 1-minute bars
+            min_bars=config["min_candles"],
         )
         return df if df is not None and len(df) > 0 else None
-    except Exception as e:
-        log.warning(f"Price fetch failed: {e}")
-        return None
+    else:
+        # 1h path: Binance 5m candles (existing behavior)
+        from data_fetcher import get_price_with_fallback
+
+        now_ms = int(_time.time() * 1000)
+        start_ms = now_ms - (config["bar_lookback"] * 5 * 60 * 1000)
+
+        try:
+            df = get_price_with_fallback(
+                symbol="BTCUSDT",
+                interval=config["bar_interval"],
+                start_time=start_ms,
+                end_time=now_ms,
+            )
+            return df if df is not None and len(df) > 0 else None
+        except Exception as e:
+            log.warning(f"Price fetch failed: {e}")
+            return None
 
 
-def generate_signal() -> LiveSignal:
-    """Generate the current live signal.
+def generate_signal(duration: str = "1h") -> LiveSignal:
+    """Generate the current live signal for a given duration.
 
     Chains: market discovery → odds → prices → indicators → scoring.
+
+    Args:
+        duration: "1h" or "15m" (keys from market_config.MARKET_CONFIG)
     """
     try:
-        return _generate_signal_inner()
+        return _generate_signal_inner(duration)
     except Exception as e:
         log.exception("Signal generation failed")
         return LiveSignal(
@@ -262,15 +279,17 @@ def generate_signal() -> LiveSignal:
         )
 
 
-def _generate_signal_inner() -> LiveSignal:
+def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
     from indicators import (
         calculate_rsi, ma_crossover, volume_spike,
         score_signal, fee_adjusted_edge,
     )
     from data_fetcher import get_spot_price
 
+    config = get_config(duration)
+
     # 4.1 — Market discovery
-    market = get_current_market("1h")
+    market = get_current_market(duration)
     if market is None:
         return LiveSignal(
             decision="SKIP", final_decision="SKIP", confidence="none",
@@ -279,7 +298,7 @@ def _generate_signal_inner() -> LiveSignal:
             market_token_id="", market_slug="", suggested_price=None,
             minutes_remaining=0, seconds_remaining=0,
             hour_open_time=None, hour_end_time=None,
-            note="No active hourly BTC market found",
+            note=f"No active {duration} BTC market found",
         )
 
     token_id = market["token_id"]
@@ -297,14 +316,28 @@ def _generate_signal_inner() -> LiveSignal:
         minutes_remaining = 0
         seconds_remaining = 0
 
+    # 5.2 — No-bet-final-minutes rule
+    no_bet_min = config.get("no_bet_final_minutes", 10)
+    if minutes_remaining < no_bet_min and minutes_remaining >= 0:
+        return LiveSignal(
+            decision="SKIP", final_decision="SKIP", confidence="none",
+            score=0, model_probability=0.5, rsi=50, ma_signal=0,
+            volume_signal=0, odds=0, edge_pct=0, fee_eroded=False,
+            market_token_id=token_id, market_slug=slug,
+            suggested_price=None, minutes_remaining=minutes_remaining,
+            seconds_remaining=seconds_remaining,
+            hour_open_time=hour_open_time, hour_end_time=hour_end_time,
+            note=f"SKIP: {minutes_remaining}min remaining < {no_bet_min}min threshold",
+        )
+
     # 4.2 — Current odds
     odds = get_current_odds(token_id)
     if odds is None:
         odds = 0.50  # fallback to even odds
 
-    # 4.3 — Recent 5m candles
-    df_5m = get_current_price_data()
-    if df_5m is None or len(df_5m) < 16:
+    # 4.3 — Price data (duration-aware)
+    df_price = get_current_price_data_for_duration(config)
+    if df_price is None or len(df_price) < config["min_candles"]:
         return LiveSignal(
             decision="SKIP", final_decision="SKIP", confidence="none",
             score=0, model_probability=0.5, rsi=50, ma_signal=0,
@@ -316,18 +349,19 @@ def _generate_signal_inner() -> LiveSignal:
             note="Insufficient price data",
         )
 
-    # Compute indicators
-    prices = df_5m["close"].tolist()
-    volumes = df_5m["volume"].tolist()
+    # Compute indicators with duration-scaled params
+    prices = df_price["close"].tolist()
+    volumes = df_price["volume"].tolist()
 
-    rsi = calculate_rsi(prices)
-    ma_sig = ma_crossover(prices)
+    rsi = calculate_rsi(prices, period=config["rsi_period"])
+    ma_sig = ma_crossover(prices, fast=config["ma_fast"], slow=config["ma_slow"])
 
-    # Volume spike
-    if len(volumes) >= 10:
-        avg_vol = sum(volumes[-11:-1]) / 10
+    # Volume spike with duration-scaled lookback
+    vol_lookback = config["volume_lookback"]
+    if len(volumes) >= vol_lookback:
+        avg_vol = sum(volumes[-(vol_lookback + 1):-1]) / vol_lookback
         current_vol = volumes[-1]
-        last_candle = df_5m.iloc[-1]
+        last_candle = df_price.iloc[-1]
         candle_dir = 1 if last_candle["close"] > last_candle["open"] else -1
         vol_sig = volume_spike(current_vol, avg_vol, candle_dir)
     else:
@@ -339,25 +373,38 @@ def _generate_signal_inner() -> LiveSignal:
     # Fee-adjusted edge
     edge = fee_adjusted_edge(sig.decision, odds, sig.model_probability)
 
-    # Suggested limit price: if BET HIGHER, bid below current odds
+    # Suggested limit price
+    discount = config.get("suggested_price_discount", 0.95)
     suggested_price = None
     if edge.final_decision == "BET HIGHER":
-        suggested_price = round(odds * 0.95, 2)  # 5% discount
+        suggested_price = round(odds * discount, 2)
     elif edge.final_decision == "BET LOWER":
-        suggested_price = round((1 - odds) * 0.95, 2)
+        suggested_price = round((1 - odds) * discount, 2)
 
-    # Strike + current price — use spot price for real-time current
-    spot = get_spot_price()
-    current_price = spot if spot else (float(df_5m.iloc[-1]["close"]) if len(df_5m) > 0 else None)
-    strike_price = None
-    if hour_open_time is not None and current_price is not None:
-        open_ms = hour_open_time
-        # Find the first candle whose open_time >= hour_open_time
-        matching = df_5m[df_5m["open_time"] >= open_ms]
-        if len(matching) > 0:
-            strike_price = float(matching.iloc[0]["open"])
-        elif len(df_5m) > 0:
-            strike_price = float(df_5m.iloc[0]["open"])
+    # Strike + current price
+    if config["price_source"] == "chainlink":
+        # For Chainlink: strike = first price in the window, current = latest
+        spot = get_spot_price()
+        current_price = spot if spot else (float(df_price.iloc[-1]["close"]) if len(df_price) > 0 else None)
+        strike_price = None
+        if hour_open_time is not None and len(df_price) > 0:
+            matching = df_price[df_price["open_time"] >= hour_open_time]
+            if len(matching) > 0:
+                strike_price = float(matching.iloc[0]["open"])
+            else:
+                strike_price = float(df_price.iloc[0]["open"])
+    else:
+        # Binance path (existing behavior)
+        spot = get_spot_price()
+        current_price = spot if spot else (float(df_price.iloc[-1]["close"]) if len(df_price) > 0 else None)
+        strike_price = None
+        if hour_open_time is not None and current_price is not None:
+            open_ms = hour_open_time
+            matching = df_price[df_price["open_time"] >= open_ms]
+            if len(matching) > 0:
+                strike_price = float(matching.iloc[0]["open"])
+            elif len(df_price) > 0:
+                strike_price = float(df_price.iloc[0]["open"])
 
     return LiveSignal(
         decision=sig.decision,

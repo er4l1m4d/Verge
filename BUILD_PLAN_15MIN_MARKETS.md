@@ -191,10 +191,24 @@ signal is displayed or logged.
 
 ---
 
-## Phase 4 — Market Discovery, Generalized
+## Phase 4 — Market Discovery, Generalized ✅ COMPLETE
 
-**Goal:** find the live 15-minute BTC market the same reliable way the
-1-hour path already does, with a fallback in case 1.4 never got resolved.
+**Status:** Implemented August 7, 2026.
+Modified: `backend/engine.py`
+
+**4.1 — Generalize market discovery by duration**
+**DONE.** Renamed `get_current_hourly_market()` → `get_current_market(duration="1h")`.
+Looks up `series_slug` from `market_config.get_config(duration)`. Extracted
+`_fetch_events_by_series()` as a reusable helper. Returns generic keys
+(`window_open`, `window_end`, `duration`) alongside backward-compat keys
+(`hour_open_time`, `hour_end_time`). Verified: 1h finds the correct hourly
+market, 15m finds the correct 15-minute market.
+
+**4.2 — Build the slug-prefix fallback**
+**DONE.** Added `_fetch_events_by_slug_prefix()` — fetches 100 recent events
+(no series filter), filters client-side for slugs starting with the duration's
+prefix. Activated automatically when the series_slug query returns empty.
+Verified: 15m discovery works via both primary and fallback paths.
 
 **4.1 — Generalize market discovery by duration**
 How: The existing discovery function queries Gamma's `/events` endpoint

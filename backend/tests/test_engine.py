@@ -116,7 +116,7 @@ class TestLiveSignal:
         sig = generate_signal()
         assert sig.decision == "SKIP"
         assert sig.final_decision == "SKIP"
-        assert sig.note == "No active hourly BTC market found"
+        assert sig.note == "No active 1h BTC market found"
 
 
 class TestFlaskAPI:
