@@ -5,6 +5,7 @@ Flask app exposing:
   GET /api/health   — health check (4.5)
   GET /api/heartbeat — heartbeat with persistence (6.1)
   GET /api/stats    — aggregate stats (5.4)
+  GET /api/candles  — 5m candles for mini-chart
 """
 import os
 import sys
@@ -98,6 +99,56 @@ def signal():
             "decision": "SKIP",
             "final_decision": "SKIP",
         }), 500
+
+
+@app.route("/api/candles")
+@require_secret
+def candles():
+    """Fetch 5m candles for the current hour for the mini-chart.
+
+    Returns candle data + strike price for chart rendering.
+    """
+    try:
+        import time as _time
+        import json as _json
+        from data_fetcher import get_price_with_fallback
+
+        now_ms = int(_time.time() * 1000)
+        # Fetch last 12 candles (1 hour of 5m data) plus a few extra for context
+        start_ms = now_ms - (16 * 5 * 60 * 1000)
+
+        df = get_price_with_fallback(
+            symbol="BTCUSDT",
+            interval="5m",
+            start_time=start_ms,
+            end_time=now_ms,
+        )
+
+        if df is None or len(df) == 0:
+            return jsonify({"candles": [], "strike": None})
+
+        # Take last 12 candles (the current hour)
+        df_hour = df.tail(12)
+        candles_list = []
+        for _, row in df_hour.iterrows():
+            candles_list.append({
+                "time": int(row["open_time"]),
+                "open": round(float(row["open"]), 2),
+                "high": round(float(row["high"]), 2),
+                "low": round(float(row["low"]), 2),
+                "close": round(float(row["close"]), 2),
+            })
+
+        # Strike = open of first candle in the hour
+        strike = round(float(df_hour.iloc[0]["open"]), 2)
+
+        return jsonify({
+            "candles": candles_list,
+            "strike": strike,
+        })
+    except Exception as e:
+        log.warning(f"Candles fetch failed: {e}")
+        return jsonify({"candles": [], "strike": None})
 
 
 @app.route("/api/heartbeat")

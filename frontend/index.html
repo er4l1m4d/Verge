@@ -101,41 +101,144 @@
 
   /* --- Decision Band --- */
   .decision-band {
-    text-align: center;
-    padding: 48px 0;
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    padding: 32px 0;
     border-bottom: 1px solid rgba(255,255,255,0.06);
+    min-height: 180px;
   }
 
-  .status-countdown-decision {
+  .decision-left {
+    flex: 1;
     display: flex;
-    align-items: center;
+    flex-direction: column;
     justify-content: center;
-    gap: 8px;
-    flex-wrap: wrap;
-    font-size: 13px;
-    color: var(--static);
+    padding-right: 32px;
+    border-right: 1px solid rgba(255,255,255,0.06);
+  }
+
+  .price-panel {
+    display: flex;
+    align-items: baseline;
+    gap: 24px;
+    margin-bottom: 12px;
+  }
+
+  .price-block {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .price-block-label {
+    font-size: 11px;
     font-family: var(--font-mono);
+    color: var(--static);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .price-block-value {
+    font-size: 22px;
+    font-family: var(--font-mono);
+    font-weight: 500;
     font-variant-numeric: tabular-nums;
   }
 
-  .status-prices {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
+  .price-block-value.strike {
     color: var(--static);
   }
 
-  .price-strike { opacity: 0.6; }
+  .price-block-value.current.up {
+    color: var(--signal-up);
+  }
 
-  .price-current.up { color: var(--signal-up); }
-  .price-current.down { color: var(--signal-down); }
+  .price-block-value.current.down {
+    color: var(--signal-down);
+  }
+
+  .price-delta {
+    font-size: 13px;
+    font-family: var(--font-mono);
+    font-weight: 500;
+    padding: 2px 6px;
+    border-radius: 3px;
+    align-self: flex-start;
+    margin-top: 4px;
+  }
+
+  .price-delta.up {
+    color: var(--signal-up);
+    background: rgba(51,193,126,0.1);
+  }
+
+  .price-delta.down {
+    color: var(--signal-down);
+    background: rgba(226,76,76,0.1);
+  }
+
+  .chart-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 16px;
+  }
+
+  .chart-container {
+    flex: 1;
+    position: relative;
+    height: 100px;
+    background: rgba(255,255,255,0.02);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .chart-container canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  .countdown-block {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    min-width: 60px;
+  }
+
+  .countdown-value {
+    font-size: 20px;
+    font-family: var(--font-mono);
+    font-weight: 500;
+    color: var(--chalk);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 1px;
+  }
+
+  .countdown-label {
+    font-size: 9px;
+    font-family: var(--font-mono);
+    color: var(--static);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+
+  .decision-right {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding-left: 32px;
+    min-width: 220px;
+  }
 
   .decision-label {
-    font-size: 56px;
+    font-size: 48px;
     font-weight: 700;
     letter-spacing: -1px;
     transition: color 200ms ease;
+    line-height: 1;
   }
 
   .decision-label.up { color: var(--signal-up); }
@@ -434,7 +537,12 @@
 
   /* --- Mobile --- */
   @media (max-width: 640px) {
+    .decision-band { flex-direction: column; min-height: auto; }
+    .decision-left { border-right: none; padding-right: 0; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 24px; }
+    .decision-right { padding-left: 0; padding-top: 24px; min-width: auto; }
     .decision-label { font-size: 36px; }
+    .price-panel { gap: 16px; }
+    .price-block-value { font-size: 18px; }
     .evidence-band { grid-template-columns: 1fr; }
     .stat-block { padding: 16px 20px; }
     .stat-value { font-size: 22px; }
@@ -774,6 +882,129 @@ async function fetchStats() {
   }
 }
 
+async function fetchCandles() {
+  try {
+    const resp = await fetch(`${API_BASE}/api/candles`, { headers: authHeaders() });
+    if (resp.status === 401) { localStorage.removeItem('verge_secret'); return null; }
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (e) {
+    return null;
+  }
+}
+
+function drawChart(candles, strike) {
+  const canvas = document.getElementById('price-chart');
+  if (!canvas || !candles || candles.length === 0) return;
+
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.scale(dpr, dpr);
+
+  const W = rect.width;
+  const H = rect.height;
+  const pad = { top: 12, right: 8, bottom: 20, left: 2 };
+  const chartW = W - pad.left - pad.right;
+  const chartH = H - pad.top - pad.bottom;
+
+  ctx.clearRect(0, 0, W, H);
+
+  const closes = candles.map(c => c.close);
+  const allPrices = strike ? [...closes, strike] : closes;
+  const minP = Math.min(...allPrices);
+  const maxP = Math.max(...allPrices);
+  const range = maxP - minP || 1;
+  const yPad = range * 0.1;
+  const yMin = minP - yPad;
+  const yMax = maxP + yPad;
+  const yRange = yMax - yMin;
+
+  const xStep = chartW / (candles.length - 1 || 1);
+
+  function toX(i) { return pad.left + i * xStep; }
+  function toY(p) { return pad.top + chartH - ((p - yMin) / yRange) * chartH; }
+
+  // Strike line (dashed)
+  if (strike) {
+    const sy = toY(strike);
+    ctx.strokeStyle = 'rgba(214,165,68,0.5)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.moveTo(pad.left, sy);
+    ctx.lineTo(W - pad.right, sy);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Strike label
+    ctx.fillStyle = 'rgba(214,165,68,0.7)';
+    ctx.font = '9px "Geist Mono", monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText('Target', W - pad.right - 30, sy - 4);
+  }
+
+  // Price line (solid)
+  ctx.strokeStyle = '#E7E9EC';
+  ctx.lineWidth = 1.5;
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  candles.forEach((c, i) => {
+    const x = toX(i);
+    const y = toY(c.close);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  // Gradient fill below line
+  const grad = ctx.createLinearGradient(0, pad.top, 0, pad.top + chartH);
+  grad.addColorStop(0, 'rgba(231,233,236,0.08)');
+  grad.addColorStop(1, 'rgba(231,233,236,0)');
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  candles.forEach((c, i) => {
+    const x = toX(i);
+    const y = toY(c.close);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.lineTo(toX(candles.length - 1), pad.top + chartH);
+  ctx.lineTo(toX(0), pad.top + chartH);
+  ctx.closePath();
+  ctx.fill();
+
+  // Current price dot (last point)
+  const lastCandle = candles[candles.length - 1];
+  const dotX = toX(candles.length - 1);
+  const dotY = toY(lastCandle.close);
+  ctx.fillStyle = '#E7E9EC';
+  ctx.beginPath();
+  ctx.arc(dotX, dotY, 3, 0, Math.PI * 2);
+  ctx.fill();
+
+  // X-axis labels (first, middle, last)
+  ctx.fillStyle = 'rgba(107,114,128,0.6)';
+  ctx.font = '9px "Geist Mono", monospace';
+  ctx.textAlign = 'center';
+  const firstTime = new Date(candles[0].time);
+  const lastTime = new Date(candles[candles.length - 1].time);
+  const midTime = new Date(candles[Math.floor(candles.length / 2)].time);
+  const fmt = (d) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: false });
+  ctx.fillText(fmt(firstTime), toX(0), H - 4);
+  ctx.fillText(fmt(midTime), toX(Math.floor(candles.length / 2)), H - 4);
+  ctx.fillText(fmt(lastTime), toX(candles.length - 1), H - 4);
+
+  // Y-axis: only max and min price
+  ctx.fillStyle = 'rgba(107,114,128,0.5)';
+  ctx.font = '9px "Geist Mono", monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText(`$${maxP.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0})}`, W - 2, pad.top + 4);
+  ctx.fillText(`$${minP.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0})}`, W - 2, pad.top + chartH);
+}
+
 function renderDashboard(signal, stats) {
   if (!signal) {
     document.getElementById('app').innerHTML = '<div class="error-state">Cannot reach Verge backend</div>';
@@ -812,6 +1043,17 @@ function renderDashboard(signal, stats) {
     ? (signal.current_price > signal.strike_price ? 'up' : signal.current_price < signal.strike_price ? 'down' : '')
     : '';
 
+  const delta = signal.current_price && signal.strike_price
+    ? (signal.current_price - signal.strike_price)
+    : null;
+  const deltaStr = delta !== null
+    ? `${delta >= 0 ? '+' : ''}$${Math.abs(delta).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`
+    : '';
+  const deltaDir = delta !== null ? (delta >= 0 ? 'up' : 'down') : '';
+
+  const countdownMins = String(Math.floor(secondsRemaining / 60)).padStart(2, '0');
+  const countdownSecs = String(secondsRemaining % 60).padStart(2, '0');
+
   const html = `
     <!-- Status Band -->
     <div class="status-band">
@@ -827,11 +1069,36 @@ function renderDashboard(signal, stats) {
 
     <!-- Decision Band -->
     <div class="decision-band">
-      <div class="status-countdown-decision" id="countdown"><span class="status-prices"><span class="price-strike">Strike ${strikeStr}</span> | <span class="price-current ${priceDir}">Now ${currentStr}</span></span> · <span id="countdown-text">${formatCountdown(secondsRemaining)}</span></div>
-      <div class="decision-label ${decisionClass}">${decisionIcon} ${decision}</div>
-      <div class="decision-meta">
-        <span class="confidence-badge ${confidenceClass}">${confidence}</span>
-        <span>Score ${signal.score > 0 ? '+' : ''}${(signal.score || 0).toFixed(2)}</span>
+      <div class="decision-left">
+        <div class="price-panel">
+          <div class="price-block">
+            <span class="price-block-label">Price To Beat</span>
+            <span class="price-block-value strike">${strikeStr}</span>
+          </div>
+          <div class="price-block">
+            <span class="price-block-label">Current Price</span>
+            <span class="price-block-value current ${priceDir}">${currentStr}</span>
+          </div>
+          ${deltaDir ? `<span class="price-delta ${deltaDir}">${deltaStr}</span>` : ''}
+        </div>
+        <div class="chart-row">
+          <div class="chart-container">
+            <canvas id="price-chart"></canvas>
+          </div>
+          <div class="countdown-block">
+            <span class="countdown-value" id="countdown-mins">${countdownMins}</span>
+            <span class="countdown-label">Mins</span>
+            <span class="countdown-value" id="countdown-secs">${countdownSecs}</span>
+            <span class="countdown-label">Secs</span>
+          </div>
+        </div>
+      </div>
+      <div class="decision-right">
+        <div class="decision-label ${decisionClass}">${decisionIcon} ${decision}</div>
+        <div class="decision-meta">
+          <span class="confidence-badge ${confidenceClass}">${confidence}</span>
+          <span>Score ${signal.score > 0 ? '+' : ''}${(signal.score || 0).toFixed(2)}</span>
+        </div>
       </div>
     </div>
 
@@ -911,12 +1178,14 @@ function renderDashboard(signal, stats) {
 
   document.getElementById('app').innerHTML = html;
   startCountdown();
+  refreshChart();
 }
 
-function formatCountdown(totalSeconds) {
-  const m = Math.max(0, Math.floor(totalSeconds / 60));
-  const s = Math.max(0, totalSeconds % 60);
-  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')} remaining`;
+async function refreshChart() {
+  const data = await fetchCandles();
+  if (data && data.candles && data.candles.length > 0) {
+    drawChart(data.candles, data.strike);
+  }
 }
 
 function startCountdown() {
@@ -925,8 +1194,10 @@ function startCountdown() {
 
   countdownInterval = setInterval(() => {
     secs = Math.max(0, secs - 1);
-    const el = document.getElementById('countdown-text');
-    if (el) el.textContent = formatCountdown(secs);
+    const mEl = document.getElementById('countdown-mins');
+    const sEl = document.getElementById('countdown-secs');
+    if (mEl) mEl.textContent = String(Math.floor(secs / 60)).padStart(2, '0');
+    if (sEl) sEl.textContent = String(secs % 60).padStart(2, '0');
     if (secs <= 0) clearInterval(countdownInterval);
   }, 1000);
 }
@@ -935,7 +1206,6 @@ async function poll() {
   const [signal, stats] = await Promise.all([fetchSignal(), fetchStats()]);
   renderDashboard(signal, stats);
 
-  // First-visit tutorial
   if (!localStorage.getItem('verge_tutorial_seen')) {
     showTutorial();
     localStorage.setItem('verge_tutorial_seen', '1');
@@ -945,8 +1215,11 @@ async function poll() {
 // Initial load
 poll();
 
-// Poll every 30s (frontend refresh, separate from 5min backend heartbeat)
+// Poll every 30s
 setInterval(poll, 30000);
+
+// Refresh chart every 30s
+setInterval(refreshChart, 30000);
 </script>
 
 </body>
