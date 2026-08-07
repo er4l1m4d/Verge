@@ -56,6 +56,71 @@ def health():
     })
 
 
+@app.route("/api/debug")
+@require_secret
+def debug():
+    """Diagnostic endpoint — check why data isn't persisting."""
+    import db
+    results = {}
+
+    # 1. Check Supabase connection
+    try:
+        client = db.get_client()
+        results["supabase_connected"] = True
+    except Exception as e:
+        results["supabase_connected"] = False
+        results["supabase_error"] = str(e)
+        return jsonify(results)
+
+    # 2. Count rows in each table
+    for table in ["signals", "paper_trades", "odds_snapshots", "price_snapshots"]:
+        try:
+            resp = client.table(table).select("id", count="exact").execute()
+            results[f"{table}_count"] = resp.count if hasattr(resp, 'count') else len(resp.data)
+        except Exception as e:
+            results[f"{table}_count"] = f"error: {e}"
+
+    # 3. Check if market_duration column exists
+    try:
+        resp = client.table("signals").select("market_duration").limit(1).execute()
+        results["market_duration_column"] = "exists"
+    except Exception as e:
+        results["market_duration_column"] = f"missing or error: {e}"
+
+    # 4. Try a test write to signals
+    try:
+        test_row = {
+            "market_window_start": 0,
+            "market_duration": "test",
+            "token_id": "debug",
+            "decision": "SKIP",
+            "final_decision": "SKIP",
+            "confidence": "none",
+            "score": 0,
+            "model_probability": 0.5,
+            "rsi": 50,
+            "ma_signal": 0,
+            "volume_signal": 0,
+            "odds": 0.5,
+            "edge_pct": 0,
+            "fee_eroded": False,
+            "suggested_price": None,
+            "minutes_remaining": 0,
+            "note": "debug test row",
+        }
+        resp = client.table("signals").insert(test_row).execute()
+        results["test_write"] = f"success (id={resp.data[0]['id']})"
+        # Clean up test row
+        client.table("signals").delete().eq("id", resp.data[0]["id"]).execute()
+    except Exception as e:
+        results["test_write"] = f"FAILED: {e}"
+
+    # 5. Check VERGE_SECRET env var
+    results["verge_secret_set"] = bool(os.environ.get("VERGE_SECRET"))
+
+    return jsonify(results)
+
+
 @app.route("/api/signal")
 @require_secret
 def signal():
