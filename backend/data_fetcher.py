@@ -13,6 +13,7 @@ log = logging.getLogger("verge.data")
 BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
 COINBASE_CANDLES_URL = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
 COLUMNS = ["open_time", "open", "high", "low", "close", "volume", "close_time"]
+HEADERS = {"User-Agent": "Verge/1.0"}
 
 
 def get_binance_klines(
