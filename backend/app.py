@@ -106,15 +106,13 @@ def signal():
 def candles():
     """Fetch 5m candles for the current hour for the mini-chart.
 
-    Returns candle data + strike price for chart rendering.
+    Returns candle data + strike price + spot price for real-time chart rendering.
     """
     try:
         import time as _time
-        import json as _json
-        from data_fetcher import get_price_with_fallback
+        from data_fetcher import get_price_with_fallback, get_spot_price
 
         now_ms = int(_time.time() * 1000)
-        # Fetch last 12 candles (1 hour of 5m data) plus a few extra for context
         start_ms = now_ms - (16 * 5 * 60 * 1000)
 
         df = get_price_with_fallback(
@@ -125,9 +123,8 @@ def candles():
         )
 
         if df is None or len(df) == 0:
-            return jsonify({"candles": [], "strike": None})
+            return jsonify({"candles": [], "strike": None, "spot": None, "now_ms": now_ms})
 
-        # Take last 12 candles (the current hour)
         df_hour = df.tail(12)
         candles_list = []
         for _, row in df_hour.iterrows():
@@ -139,16 +136,18 @@ def candles():
                 "close": round(float(row["close"]), 2),
             })
 
-        # Strike = open of first candle in the hour
         strike = round(float(df_hour.iloc[0]["open"]), 2)
+        spot = get_spot_price()
 
         return jsonify({
             "candles": candles_list,
             "strike": strike,
+            "spot": round(spot, 2) if spot else None,
+            "now_ms": now_ms,
         })
     except Exception as e:
         log.warning(f"Candles fetch failed: {e}")
-        return jsonify({"candles": [], "strike": None})
+        return jsonify({"candles": [], "strike": None, "spot": None, "now_ms": int(time.time() * 1000)})
 
 
 @app.route("/api/heartbeat")

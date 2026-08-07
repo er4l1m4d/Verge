@@ -893,7 +893,7 @@ async function fetchCandles() {
   }
 }
 
-function drawChart(candles, strike) {
+function drawChart(candles, strike, spot, nowMs) {
   const canvas = document.getElementById('price-chart');
   if (!canvas || !candles || candles.length === 0) return;
 
@@ -912,7 +912,27 @@ function drawChart(candles, strike) {
 
   ctx.clearRect(0, 0, W, H);
 
-  const closes = candles.map(c => c.close);
+  // Extend the last candle with spot price as a live partial candle
+  let drawCandles = [...candles];
+  if (spot && candles.length > 0) {
+    const lastCandle = candles[candles.length - 1];
+    const lastTime = lastCandle.time;
+    // How far into the current 5m bucket are we (as fraction 0..1)?
+    const candleDuration = 5 * 60 * 1000;
+    const elapsed = nowMs - lastTime;
+    const fraction = Math.min(Math.max(elapsed / candleDuration, 0), 1);
+    // Interpolate between last candle open and spot as a visual bridge
+    // But simpler: just add spot as an extra point at the current time
+    drawCandles.push({
+      time: nowMs,
+      open: lastCandle.close,
+      high: Math.max(lastCandle.close, spot),
+      low: Math.min(lastCandle.close, spot),
+      close: spot,
+    });
+  }
+
+  const closes = drawCandles.map(c => c.close);
   const allPrices = strike ? [...closes, strike] : closes;
   const minP = Math.min(...allPrices);
   const maxP = Math.max(...allPrices);
@@ -922,7 +942,8 @@ function drawChart(candles, strike) {
   const yMax = maxP + yPad;
   const yRange = yMax - yMin;
 
-  const xStep = chartW / (candles.length - 1 || 1);
+  // Use the original candle count for spacing so the live point slides in
+  const xStep = chartW / (candles.length || 1);
 
   function toX(i) { return pad.left + i * xStep; }
   function toY(p) { return pad.top + chartH - ((p - yMin) / yRange) * chartH; }
@@ -939,14 +960,14 @@ function drawChart(candles, strike) {
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // Strike label
     ctx.fillStyle = 'rgba(214,165,68,0.7)';
     ctx.font = '9px "Geist Mono", monospace';
     ctx.textAlign = 'left';
     ctx.fillText('Target', W - pad.right - 30, sy - 4);
   }
 
-  // Price line (solid)
+  // Price line — draw up to last real candle in white, then spot extension in green/red
+  // Solid white line for closed candles
   ctx.strokeStyle = '#E7E9EC';
   ctx.lineWidth = 1.5;
   ctx.lineJoin = 'round';
@@ -957,6 +978,20 @@ function drawChart(candles, strike) {
     if (i === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   });
+  // Extend to spot price
+  if (spot && drawCandles.length > candles.length) {
+    const lastX = toX(candles.length - 1);
+    const spotY = toY(spot);
+    // Interpolate x position based on how far into the 5m candle we are
+    const lastTime = candles[candles.length - 1].time;
+    const candleDuration = 5 * 60 * 1000;
+    const elapsed = nowMs - lastTime;
+    const fraction = Math.min(elapsed / candleDuration, 1);
+    const extX = lastX + xStep * fraction;
+    // Clamp to chart edge
+    const clampedX = Math.min(extX, W - pad.right);
+    ctx.lineTo(clampedX, spotY);
+  }
   ctx.stroke();
 
   // Gradient fill below line
@@ -971,19 +1006,49 @@ function drawChart(candles, strike) {
     if (i === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   });
-  ctx.lineTo(toX(candles.length - 1), pad.top + chartH);
+  if (spot && drawCandles.length > candles.length) {
+    const lastX = toX(candles.length - 1);
+    const spotY = toY(spot);
+    const lastTime = candles[candles.length - 1].time;
+    const candleDuration = 5 * 60 * 1000;
+    const elapsed = nowMs - lastTime;
+    const fraction = Math.min(elapsed / candleDuration, 1);
+    const extX = Math.min(lastX + xStep * fraction, W - pad.right);
+    ctx.lineTo(extX, spotY);
+  }
+  const fillEndX = spot && drawCandles.length > candles.length
+    ? Math.min(toX(candles.length - 1) + xStep * Math.min((nowMs - candles[candles.length - 1].time) / (5 * 60 * 1000), 1), W - pad.right)
+    : toX(candles.length - 1);
+  ctx.lineTo(fillEndX, pad.top + chartH);
   ctx.lineTo(toX(0), pad.top + chartH);
   ctx.closePath();
   ctx.fill();
 
-  // Current price dot (last point)
-  const lastCandle = candles[candles.length - 1];
-  const dotX = toX(candles.length - 1);
-  const dotY = toY(lastCandle.close);
-  ctx.fillStyle = '#E7E9EC';
-  ctx.beginPath();
-  ctx.arc(dotX, dotY, 3, 0, Math.PI * 2);
-  ctx.fill();
+  // Pulsing dot at current spot price
+  if (spot && drawCandles.length > candles.length) {
+    const lastX = toX(candles.length - 1);
+    const spotY = toY(spot);
+    const lastTime = candles[candles.length - 1].time;
+    const candleDuration = 5 * 60 * 1000;
+    const elapsed = nowMs - lastTime;
+    const fraction = Math.min(elapsed / candleDuration, 1);
+    const clampedX = Math.min(lastX + xStep * fraction, W - pad.right);
+
+    const isUp = spot >= (candles[candles.length - 1]?.close || spot);
+    const dotColor = isUp ? '#33C17E' : '#E24C4C';
+
+    // Glow
+    ctx.beginPath();
+    ctx.arc(clampedX, spotY, 6, 0, Math.PI * 2);
+    ctx.fillStyle = isUp ? 'rgba(51,193,126,0.2)' : 'rgba(226,76,76,0.2)';
+    ctx.fill();
+
+    // Solid dot
+    ctx.beginPath();
+    ctx.arc(clampedX, spotY, 3, 0, Math.PI * 2);
+    ctx.fillStyle = dotColor;
+    ctx.fill();
+  }
 
   // X-axis labels (first, middle, last)
   ctx.fillStyle = 'rgba(107,114,128,0.6)';
@@ -1184,7 +1249,7 @@ function renderDashboard(signal, stats) {
 async function refreshChart() {
   const data = await fetchCandles();
   if (data && data.candles && data.candles.length > 0) {
-    drawChart(data.candles, data.strike);
+    drawChart(data.candles, data.strike, data.spot, data.now_ms);
   }
 }
 
@@ -1218,8 +1283,8 @@ poll();
 // Poll every 30s
 setInterval(poll, 30000);
 
-// Refresh chart every 30s
-setInterval(refreshChart, 30000);
+// Refresh chart every 5s for live price movement
+setInterval(refreshChart, 5000);
 </script>
 
 </body>
