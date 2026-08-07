@@ -331,6 +331,134 @@
   @media (prefers-reduced-motion: reduce) {
     .heartbeat-dot { animation: none; opacity: 1; }
   }
+
+  /* --- Tutorial Modal --- */
+  .tutorial-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.75);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+
+  .tutorial-modal {
+    background: var(--deck);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 8px;
+    max-width: 560px;
+    width: 100%;
+    max-height: 80vh;
+    overflow-y: auto;
+    padding: 32px;
+  }
+
+  .tutorial-modal h2 {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--chalk);
+    margin-bottom: 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .tutorial-close {
+    background: none;
+    border: none;
+    color: var(--static);
+    font-size: 20px;
+    cursor: pointer;
+    padding: 4px 8px;
+  }
+
+  .tutorial-close:hover { color: var(--chalk); }
+
+  .tutorial-section {
+    margin-bottom: 24px;
+  }
+
+  .tutorial-section:last-of-type { margin-bottom: 16px; }
+
+  .tutorial-section h3 {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--static);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 8px;
+  }
+
+  .tutorial-section p {
+    font-size: 14px;
+    color: var(--chalk);
+    line-height: 1.6;
+    opacity: 0.85;
+  }
+
+  .tutorial-section p + p { margin-top: 8px; }
+
+  .tutorial-indicators {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1px;
+    background: rgba(255,255,255,0.06);
+    border-radius: 4px;
+    margin-top: 8px;
+  }
+
+  .tutorial-indicator {
+    background: var(--void);
+    padding: 12px;
+    text-align: center;
+  }
+
+  .tutorial-indicator strong {
+    display: block;
+    font-size: 13px;
+    font-family: var(--font-mono);
+    color: var(--chalk);
+    margin-bottom: 4px;
+  }
+
+  .tutorial-indicator span {
+    font-size: 12px;
+    color: var(--static);
+    line-height: 1.4;
+  }
+
+  .tutorial-gotit {
+    display: block;
+    width: 100%;
+    margin-top: 20px;
+    padding: 12px;
+    background: rgba(255,255,255,0.06);
+    border: none;
+    border-radius: 6px;
+    color: var(--chalk);
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    text-align: center;
+  }
+
+  .tutorial-gotit:hover { background: rgba(255,255,255,0.1); }
+
+  .tutorial-disclaimer {
+    margin-top: 24px;
+    padding-top: 16px;
+    border-top: 1px solid rgba(255,255,255,0.06);
+    font-size: 12px;
+    color: var(--static);
+    line-height: 1.5;
+  }
+
+  @media (max-width: 640px) {
+    .tutorial-modal { padding: 24px; }
+    .tutorial-indicators { grid-template-columns: 1fr; }
+  }
 </style>
 </head>
 <body>
@@ -339,7 +467,87 @@
   <div class="loading">Connecting to Verge...</div>
 </div>
 
+<div class="tutorial-overlay" id="tutorial" style="display:none;">
+  <div class="tutorial-modal">
+    <h2>
+      How it works
+      <button class="tutorial-close" id="tutorial-close">&times;</button>
+    </h2>
+
+    <div class="tutorial-section">
+      <h3>What Verge is</h3>
+      <p>Verge is a decision-support tool for Polymarket's hourly BTC Up/Down markets. It checks every hour whether there's a mathematical edge worth betting on, and tells you when to skip.</p>
+      <p>It is not a prediction engine. It's a filter — it watches the market and only speaks up when the odds look mispriced.</p>
+    </div>
+
+    <div class="tutorial-section">
+      <h3>Reading the dashboard</h3>
+      <p>The top shows the current market (BTC, hourly) and a countdown to when the hour closes. Below that is the big decision — BET HIGHER, BET LOWER, or SKIP.</p>
+      <p>The three blocks below the decision show the evidence: what each indicator found and how much it contributed to the score. The odds bar shows the market price (white dot) versus what the indicators think the probability should be (amber dot) — the gap between them is the potential opportunity.</p>
+      <p>The bottom row shows your last 10 resolved trades and your running win rate.</p>
+    </div>
+
+    <div class="tutorial-section">
+      <h3>The indicators</h3>
+      <div class="tutorial-indicators">
+        <div class="tutorial-indicator">
+          <strong>RSI</strong>
+          <span>Momentum — is the move exhausted or just starting?</span>
+        </div>
+        <div class="tutorial-indicator">
+          <strong>Volume</strong>
+          <span>Activity — is this move backed by real trading?</span>
+        </div>
+        <div class="tutorial-indicator">
+          <strong>MA Trend</strong>
+          <span>Direction — is price above or below its recent average?</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="tutorial-section">
+      <h3>BET vs SKIP</h3>
+      <p>Verge doesn't bet every hour. It only bets when there's a measurable edge after fees. Skipping most of the time is how the tool protects you — it's not indecision, it's discipline.</p>
+    </div>
+
+    <div class="tutorial-section">
+      <h3>How resolution works</h3>
+      <p>Each hour closes at a set time. If BTC is higher than when the hour started, the "UP" side wins. If it's lower, the "DOWN" side wins. Verge logs the outcome and updates the win rate in real time.</p>
+    </div>
+
+    <div class="tutorial-disclaimer">
+      Paper trading only. Not financial advice. No guarantees of profit. This is an informational tool — you are responsible for any decisions you make.
+    </div>
+
+    <button class="tutorial-gotit" id="tutorial-gotit">Got it</button>
+  </div>
+</div>
+
 <script>
+// Tutorial modal
+const tutorialOverlay = document.getElementById('tutorial');
+const tutorialClose = document.getElementById('tutorial-close');
+const tutorialGotIt = document.getElementById('tutorial-gotit');
+
+function showTutorial() {
+  tutorialOverlay.style.display = 'flex';
+}
+
+function hideTutorial() {
+  tutorialOverlay.style.display = 'none';
+}
+
+tutorialClose.addEventListener('click', hideTutorial);
+tutorialGotIt.addEventListener('click', hideTutorial);
+tutorialOverlay.addEventListener('click', (e) => {
+  if (e.target === tutorialOverlay) hideTutorial();
+});
+
+function openTutorialLink(e) {
+  e.preventDefault();
+  showTutorial();
+}
+
 const API_BASE = window.location.hostname === 'localhost'
   ? 'http://localhost:5001'
   : (window.VERGE_API_URL || 'https://verge-1-i4zv.onrender.com');
@@ -486,7 +694,7 @@ function renderDashboard(signal, stats) {
 
     <!-- Footer -->
     <div class="footer">
-      Verge &middot; BTC Hourly Signal &middot; Paper trading only
+      Verge &middot; BTC Hourly Signal &middot; Paper trading only &middot; <a href="#" onclick="openTutorialLink(event)">How it works</a>
     </div>
   `;
 
@@ -515,6 +723,12 @@ function startCountdown() {
 async function poll() {
   const [signal, stats] = await Promise.all([fetchSignal(), fetchStats()]);
   renderDashboard(signal, stats);
+
+  // First-visit tutorial
+  if (!localStorage.getItem('verge_tutorial_seen')) {
+    showTutorial();
+    localStorage.setItem('verge_tutorial_seen', '1');
+  }
 }
 
 // Initial load
