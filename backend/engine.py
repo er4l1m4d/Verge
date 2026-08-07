@@ -572,7 +572,7 @@ def resolve_previous_hour(duration: str = "1h") -> bool:
     from market_config import get_config
 
     config = get_config(duration)
-    window_ms = config["window"]
+    window_ms = config["window_ms"]
 
     client = db.get_client()
     unresolved = db.get_unresolved_trades(client, duration=duration)
@@ -609,28 +609,12 @@ def resolve_previous_hour(duration: str = "1h") -> bool:
                         f"({len(window_ticks)} ticks)"
                     )
                 else:
-                    # 7.2d: Fallback to Coinbase candles if insufficient ticks
-                    log.info(
+                    # Insufficient ticks — skip resolution, retry on next heartbeat
+                    log.warning(
                         f"Insufficient ticks for 15m resolution "
-                        f"({len(window_ticks)} ticks), falling back to Coinbase"
+                        f"({len(window_ticks)} ticks, need ≥2), skipping"
                     )
-                    from data_fetcher import get_coinbase_candles
-                    df = get_coinbase_candles(
-                        product_id="BTC-USD",
-                        granularity=config["candle_interval"],
-                        start_ms=window_start,
-                        end_ms=close_ms,
-                    )
-                    if df is None or len(df) == 0:
-                        log.warning(f"No Coinbase data for 15m resolution, skipping")
-                        continue
-                    open_price = float(df.iloc[0]["open"])
-                    close_price = float(df.iloc[0]["close"])
-                    actual_outcome = "UP" if close_price > open_price else "DOWN"
-                    log.info(
-                        f"15m resolution via Coinbase fallback: "
-                        f"open=${open_price:,.2f} close=${close_price:,.2f} -> {actual_outcome}"
-                    )
+                    continue
             else:
                 # 1h: use Binance (existing behavior, unchanged)
                 from data_fetcher import get_binance_klines

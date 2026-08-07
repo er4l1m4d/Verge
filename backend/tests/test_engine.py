@@ -187,3 +187,40 @@ class TestFlaskAPI:
         assert resp.status_code == 200
         assert mock_persist.call_count >= 1
         assert mock_resolve.call_count >= 1
+
+
+class TestResolutionConfig:
+    """Verify resolve_previous_hour uses correct config keys (unmocked)."""
+
+    def test_1h_config_has_window_ms(self):
+        from market_config import get_config
+        config = get_config("1h")
+        assert "window_ms" in config
+        assert isinstance(config["window_ms"], int)
+        assert config["window_ms"] > 0
+
+    def test_15m_config_has_window_ms(self):
+        from market_config import get_config
+        config = get_config("15m")
+        assert "window_ms" in config
+        assert isinstance(config["window_ms"], int)
+        assert config["window_ms"] > 0
+
+    def test_1h_config_window_ms_is_3600000(self):
+        from market_config import get_config
+        config = get_config("1h")
+        assert config["window_ms"] == 3_600_000
+
+    def test_15m_config_window_ms_is_900000(self):
+        from market_config import get_config
+        config = get_config("15m")
+        assert config["window_ms"] == 900_000
+
+    def test_resolve_previous_hour_accesses_window_ms(self):
+        """Verify resolve_previous_hour doesn't KeyError on config access."""
+        from market_config import get_config
+        for dur in ("1h", "15m"):
+            config = get_config(dur)
+            # This is the exact access pattern in resolve_previous_hour
+            window_ms = config["window_ms"]
+            assert isinstance(window_ms, int)

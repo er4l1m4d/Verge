@@ -20,7 +20,7 @@ MARKET_CONFIG = {
         # Market discovery
         "window_ms": 3_600_000,                    # 60 minutes
         "series_slug": "btc-up-or-down-hourly",    # Gamma API filter
-        "slug_prefix": "btc-updown-hourly-",       # fallback discovery
+        "slug_prefix": "bitcoin-up-or-down-",       # fallback discovery
 
         # Price source
         "price_source": "binance",                 # Binance klines
