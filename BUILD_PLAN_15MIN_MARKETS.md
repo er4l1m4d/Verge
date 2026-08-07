@@ -46,11 +46,29 @@ Public endpoint tested and confirmed working (block #91,602,108).
 
 ---
 
-## Phase 2 — Market Configuration Layer
+## Phase 2 — Market Configuration Layer ✅ COMPLETE
 
-**Goal:** one place that describes what's different about each duration,
-so adding a third one later is a config entry, not a hunt through five
-files.
+**Status:** Implemented August 7, 2026.
+New module: `backend/market_config.py`
+
+**2.1 — Build a per-duration config structure**
+**DONE.** Created `market_config.py` with `MARKET_CONFIG` dict containing
+one entry per duration ("1h" and "15m"). Each entry includes: window_ms,
+series_slug, slug_prefix, price_source, bar_interval, bar_lookback,
+rsi_period, ma_fast, ma_slow, volume_lookback, no_bet_final_minutes,
+suggested_price_discount, min_candles. The "1h" entry reproduces the exact
+hardcoded values from indicators.py and engine.py — verified with 10-point
+automated check, all passed. PRD-locked constants (weights, thresholds, fees)
+included as module-level constants. `get_config()` and `supported_durations()`
+helpers provided.
+
+**2.2 — Size the 15-minute entry's indicator windows correctly**
+**DONE.** The 15m entry uses 1-minute bars so:
+- RSI-14 covers 14 minutes (fits inside the 15m window, not pre-window data)
+- MA-5 covers 5 minutes (short-term trend within the window)
+- MA-15 covers exactly 15 minutes (the full window length)
+- no_bet_final_minutes = 3 (~20% of window, proportionally tighter than 1h's ~17%)
+- Volume proxied from Binance (Phase 3.4)
 
 **2.1 — Build a per-duration config structure**
 How: A new module, `market_config.py`, holding one entry per duration with:
