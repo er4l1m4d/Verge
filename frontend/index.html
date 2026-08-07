@@ -827,7 +827,7 @@ function renderDashboard(signal, stats) {
 
     <!-- Decision Band -->
     <div class="decision-band">
-      <div class="status-countdown-decision" id="countdown"><span id="countdown-text">${formatCountdown(secondsRemaining)}</span><span class="status-prices"><span class="price-strike">Strike ${strikeStr}</span> · <span class="price-current ${priceDir}">Now ${currentStr}</span></span></div>
+      <div class="status-countdown-decision" id="countdown"><span id="countdown-text">${formatCountdown(secondsRemaining)}</span><span class="status-prices"><span class="price-strike">Strike ${strikeStr}</span> | <span class="price-current ${priceDir}">Now ${currentStr}</span></span></div>
       <div class="decision-label ${decisionClass}">${decisionIcon} ${decision}</div>
       <div class="decision-meta">
         <span class="confidence-badge ${confidenceClass}">${confidence}</span>
