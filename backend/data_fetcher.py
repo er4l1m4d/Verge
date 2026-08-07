@@ -8,6 +8,7 @@ import pandas as pd
 import requests
 
 BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
+COINBASE_CANDLES_URL = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
 COLUMNS = ["open_time", "open", "high", "low", "close", "volume", "close_time"]
 
 
@@ -196,13 +197,58 @@ def get_coingecko_ohlc(
     return df
 
 
+def get_coinbase_candles(
+    granularity: int = 300,
+    limit: int = 300,
+) -> pd.DataFrame:
+    """Fetch BTC-USD candles from Coinbase Exchange API (includes volume).
+
+    Args:
+        granularity: candle width in seconds (300 = 5m)
+        limit: max candles (Coinbase caps at 300)
+
+    Returns:
+        DataFrame with same columns as get_binance_klines.
+    """
+    params = {"granularity": granularity, "limit": limit}
+
+    try:
+        resp = requests.get(COINBASE_CANDLES_URL, params=params, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        print(f"  Warning: Coinbase request failed: {e}")
+        return pd.DataFrame(columns=COLUMNS)
+
+    if not data:
+        return pd.DataFrame(columns=COLUMNS)
+
+    # Coinbase returns: [[time, low, high, open, close, volume], ...]
+    rows = []
+    for candle in data:
+        ts, low, high, open_p, close_p, volume = candle
+        rows.append({
+            "open_time": int(ts) * 1000,  # convert to ms
+            "open": float(open_p),
+            "high": float(high),
+            "low": float(low),
+            "close": float(close_p),
+            "volume": float(volume),
+            "close_time": (int(ts) + granularity) * 1000 - 1,
+        })
+
+    df = pd.DataFrame(rows, columns=COLUMNS)
+    df = df.drop_duplicates(subset="open_time").sort_values("open_time").reset_index(drop=True)
+    return df
+
+
 def get_price_with_fallback(
     symbol: str,
     interval: str,
     start_time: int,
     end_time: int,
 ) -> pd.DataFrame:
-    """Try Binance first, fall back to CoinGecko if blocked."""
+    """Try Binance first, then Coinbase (has volume), then CoinGecko."""
     try:
         df = get_binance_klines(symbol, interval, start_time, end_time)
         if len(df) > 0:
@@ -210,8 +256,17 @@ def get_price_with_fallback(
     except Exception:
         pass
 
-    # Binance failed — try CoinGecko
-    print("  Binance unavailable, falling back to CoinGecko...")
+    # Binance failed — try Coinbase (has per-candle volume)
+    try:
+        df = get_coinbase_candles(granularity=300, limit=300)
+        if len(df) > 0:
+            print("  Using Coinbase candles (with volume)")
+            return df
+    except Exception:
+        pass
+
+    # Coinbase failed — try CoinGecko (no volume)
+    print("  Binance/Coinbase unavailable, falling back to CoinGecko...")
     return get_coingecko_ohlc(days=1)
 
 
