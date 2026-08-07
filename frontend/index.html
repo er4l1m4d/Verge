@@ -376,13 +376,15 @@
 
   .tutorial-close:hover { color: var(--chalk); }
 
-  .tutorial-section {
-    margin-bottom: 24px;
+  .tutorial-step {
+    display: none;
   }
 
-  .tutorial-section:last-of-type { margin-bottom: 16px; }
+  .tutorial-step.active {
+    display: block;
+  }
 
-  .tutorial-section h3 {
+  .tutorial-step h3 {
     font-size: 13px;
     font-weight: 500;
     color: var(--static);
@@ -391,14 +393,14 @@
     margin-bottom: 8px;
   }
 
-  .tutorial-section p {
+  .tutorial-step p {
     font-size: 14px;
     color: var(--chalk);
     line-height: 1.6;
     opacity: 0.85;
   }
 
-  .tutorial-section p + p { margin-top: 8px; }
+  .tutorial-step p + p { margin-top: 8px; }
 
   .tutorial-indicators {
     display: grid;
@@ -429,23 +431,6 @@
     line-height: 1.4;
   }
 
-  .tutorial-gotit {
-    display: block;
-    width: 100%;
-    margin-top: 20px;
-    padding: 12px;
-    background: rgba(255,255,255,0.06);
-    border: none;
-    border-radius: 6px;
-    color: var(--chalk);
-    font-size: 14px;
-    font-weight: 500;
-    cursor: pointer;
-    text-align: center;
-  }
-
-  .tutorial-gotit:hover { background: rgba(255,255,255,0.1); }
-
   .tutorial-disclaimer {
     margin-top: 24px;
     padding-top: 16px;
@@ -453,6 +438,50 @@
     font-size: 12px;
     color: var(--static);
     line-height: 1.5;
+  }
+
+  .tutorial-nav {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 28px;
+    padding-top: 16px;
+    border-top: 1px solid rgba(255,255,255,0.06);
+  }
+
+  .tutorial-dots {
+    display: flex;
+    gap: 6px;
+  }
+
+  .tutorial-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.15);
+    transition: background 0.2s;
+  }
+
+  .tutorial-dot.active {
+    background: var(--chalk);
+  }
+
+  .tutorial-btn {
+    padding: 8px 20px;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    color: var(--chalk);
+    background: rgba(255,255,255,0.08);
+    transition: background 0.15s;
+  }
+
+  .tutorial-btn:hover { background: rgba(255,255,255,0.14); }
+
+  .tutorial-btn.primary {
+    background: rgba(255,255,255,0.15);
   }
 
   @media (max-width: 640px) {
@@ -474,20 +503,20 @@
       <button class="tutorial-close" id="tutorial-close">&times;</button>
     </h2>
 
-    <div class="tutorial-section">
+    <div class="tutorial-step active" data-step="0">
       <h3>What Verge is</h3>
       <p>Verge is a decision-support tool for Polymarket's hourly BTC Up/Down markets. It checks every hour whether there's a mathematical edge worth betting on, and tells you when to skip.</p>
       <p>It is not a prediction engine. It's a filter — it watches the market and only speaks up when the odds look mispriced.</p>
     </div>
 
-    <div class="tutorial-section">
+    <div class="tutorial-step" data-step="1">
       <h3>Reading the dashboard</h3>
       <p>The top shows the current market (BTC, hourly) and a countdown to when the hour closes. Below that is the big decision — BET HIGHER, BET LOWER, or SKIP.</p>
       <p>The three blocks below the decision show the evidence: what each indicator found and how much it contributed to the score. The odds bar shows the market price (white dot) versus what the indicators think the probability should be (amber dot) — the gap between them is the potential opportunity.</p>
       <p>The bottom row shows your last 10 resolved trades and your running win rate.</p>
     </div>
 
-    <div class="tutorial-section">
+    <div class="tutorial-step" data-step="2">
       <h3>The indicators</h3>
       <div class="tutorial-indicators">
         <div class="tutorial-indicator">
@@ -505,31 +534,49 @@
       </div>
     </div>
 
-    <div class="tutorial-section">
+    <div class="tutorial-step" data-step="3">
       <h3>BET vs SKIP</h3>
       <p>Verge doesn't bet every hour. It only bets when there's a measurable edge after fees. Skipping most of the time is how the tool protects you — it's not indecision, it's discipline.</p>
     </div>
 
-    <div class="tutorial-section">
+    <div class="tutorial-step" data-step="4">
       <h3>How resolution works</h3>
       <p>Each hour closes at a set time. If BTC is higher than when the hour started, the "UP" side wins. If it's lower, the "DOWN" side wins. Verge logs the outcome and updates the win rate in real time.</p>
+      <div class="tutorial-disclaimer">
+        Paper trading only. Not financial advice. No guarantees of profit. This is an informational tool — you are responsible for any decisions you make.
+      </div>
     </div>
 
-    <div class="tutorial-disclaimer">
-      Paper trading only. Not financial advice. No guarantees of profit. This is an informational tool — you are responsible for any decisions you make.
+    <div class="tutorial-nav">
+      <div class="tutorial-dots">
+        <div class="tutorial-dot active" data-dot="0"></div>
+        <div class="tutorial-dot" data-dot="1"></div>
+        <div class="tutorial-dot" data-dot="2"></div>
+        <div class="tutorial-dot" data-dot="3"></div>
+        <div class="tutorial-dot" data-dot="4"></div>
+      </div>
+      <div>
+        <button class="tutorial-btn" id="tutorial-back" style="display:none;">Back</button>
+        <button class="tutorial-btn primary" id="tutorial-next">Next</button>
+      </div>
     </div>
-
-    <button class="tutorial-gotit" id="tutorial-gotit">Got it</button>
   </div>
 </div>
 
 <script>
-// Tutorial modal
+// Tutorial modal — step-based
 const tutorialOverlay = document.getElementById('tutorial');
 const tutorialClose = document.getElementById('tutorial-close');
-const tutorialGotIt = document.getElementById('tutorial-gotit');
+const tutorialBack = document.getElementById('tutorial-back');
+const tutorialNext = document.getElementById('tutorial-next');
+const tutorialSteps = document.querySelectorAll('.tutorial-step');
+const tutorialDots = document.querySelectorAll('.tutorial-dot');
+const totalSteps = tutorialSteps.length;
+let currentStep = 0;
 
 function showTutorial() {
+  currentStep = 0;
+  renderStep();
   tutorialOverlay.style.display = 'flex';
 }
 
@@ -537,8 +584,30 @@ function hideTutorial() {
   tutorialOverlay.style.display = 'none';
 }
 
+function renderStep() {
+  tutorialSteps.forEach((s, i) => s.classList.toggle('active', i === currentStep));
+  tutorialDots.forEach((d, i) => d.classList.toggle('active', i === currentStep));
+  tutorialBack.style.display = currentStep === 0 ? 'none' : 'inline-block';
+  tutorialNext.textContent = currentStep === totalSteps - 1 ? 'Got it' : 'Next';
+}
+
+tutorialNext.addEventListener('click', () => {
+  if (currentStep === totalSteps - 1) {
+    hideTutorial();
+  } else {
+    currentStep++;
+    renderStep();
+  }
+});
+
+tutorialBack.addEventListener('click', () => {
+  if (currentStep > 0) {
+    currentStep--;
+    renderStep();
+  }
+});
+
 tutorialClose.addEventListener('click', hideTutorial);
-tutorialGotIt.addEventListener('click', hideTutorial);
 tutorialOverlay.addEventListener('click', (e) => {
   if (e.target === tutorialOverlay) hideTutorial();
 });
