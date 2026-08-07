@@ -297,7 +297,9 @@ def stats():
             "losses": 0,
             "win_rate": 0,
             "cumulative_pnl": 0,
+            "unlock_real_orders": False,
             "recent_trades": [],
+            "recent_signals": [],
         })
 
 

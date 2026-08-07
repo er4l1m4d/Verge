@@ -423,53 +423,6 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* --- History Band --- */
-  .history-band {
-    padding: 16px 0;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
-  }
-
-  .history-label {
-    font-size: 12px;
-    color: var(--static);
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    white-space: nowrap;
-  }
-
-  .history-marks {
-    display: flex;
-    gap: 4px;
-  }
-
-  .history-mark {
-    width: 20px;
-    height: 20px;
-    border-radius: 3px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 10px;
-    font-weight: 700;
-  }
-
-  .history-mark.up { background: var(--signal-up); color: var(--void); }
-  .history-mark.down { background: var(--signal-down); color: var(--void); }
-  .history-mark.skip { background: var(--idle-slate); color: var(--void); }
-  .history-mark.win { background: var(--signal-up); color: var(--void); }
-  .history-mark.loss { background: var(--signal-down); color: var(--void); }
-
-  .history-winrate {
-    margin-left: auto;
-    font-family: var(--font-mono);
-    font-size: 13px;
-    color: var(--static);
-    font-variant-numeric: tabular-nums;
-  }
-
   /* --- Signal Log Band --- */
   .signal-log {
     padding: 16px 0;
@@ -1172,9 +1125,6 @@ function renderDashboard(signal, stats) {
   const oddsPct = ((signal.odds || 0.5) * 100).toFixed(0);
   const indicatorProb = signal.model_probability ? (signal.model_probability * 100).toFixed(0) : '50';
 
-  const historyMarks = stats?.recent_trades?.slice(0, 10) || [];
-  const winRate = stats?.win_rate || 0;
-
   const recentSignals = stats?.recent_signals?.slice(0, 10) || [];
 
   const strikeStr = signal.strike_price ? `$${signal.strike_price.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : '—';
@@ -1280,21 +1230,6 @@ function renderDashboard(signal, stats) {
         <div class="edge-value">Edge after fee: ${signal.edge_pct > 0 ? '+' : ''}${(signal.edge_pct || 0).toFixed(1)}%</div>
         <div class="suggested-price">${signal.suggested_price ? `Suggested: limit @ ${signal.suggested_price}` : ''}</div>
       </div>
-    </div>
-
-    <!-- History Band -->
-    <div class="history-band">
-      <div class="history-label">Last 10</div>
-      <div class="history-marks">
-        ${historyMarks.length > 0
-          ? historyMarks.map(t => {
-              const cls = t.resolved_outcome === 'UP' ? 'win' : t.resolved_outcome === 'DOWN' ? 'loss' : 'skip';
-              return `<div class="history-mark ${cls}">${t.resolved_outcome === 'UP' ? '\u25B2' : t.resolved_outcome === 'DOWN' ? '\u25BC' : '\u2014'}</div>`;
-            }).join('')
-          : '<span style="color: var(--static); font-size: 12px;">No trades yet</span>'
-        }
-      </div>
-      <div class="history-winrate">Win ${winRate.toFixed(0)}%</div>
     </div>
 
     <!-- Signal Log Band -->
