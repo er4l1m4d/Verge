@@ -1149,13 +1149,13 @@ function renderDashboard(signal, stats) {
         <div class="price-panel">
           <div class="price-block">
             <span class="price-block-label">Price To Beat</span>
-            <span class="price-block-value strike">${strikeStr}</span>
+            <span class="price-block-value strike" id="price-strike">${strikeStr}</span>
           </div>
           <div class="price-block">
             <span class="price-block-label">Current Price</span>
-            <span class="price-block-value current ${priceDir}">${currentStr}</span>
+            <span class="price-block-value current ${priceDir}" id="price-current">${currentStr}</span>
           </div>
-          ${deltaDir ? `<span class="price-delta ${deltaDir}">${deltaStr}</span>` : ''}
+          <span class="price-delta ${deltaDir}" id="price-delta">${deltaStr}</span>
         </div>
         <div class="chart-row">
           <div class="chart-container">
@@ -1267,6 +1267,7 @@ async function refreshChart() {
     cachedCandles = data.candles;
     cachedStrike = data.strike;
     drawChart(data.candles, data.strike, data.spot, data.now_ms);
+    updatePricePanel(data.spot);
   }
 }
 
@@ -1275,6 +1276,28 @@ async function refreshSpot() {
   const data = await fetchSpot();
   if (data && data.spot) {
     drawChart(cachedCandles, cachedStrike, data.spot, data.now_ms);
+    updatePricePanel(data.spot);
+  }
+}
+
+function updatePricePanel(spot) {
+  if (!spot || !cachedStrike) return;
+  const currentEl = document.getElementById('price-current');
+  const deltaEl = document.getElementById('price-delta');
+  if (!currentEl) return;
+
+  const formatted = '$' + spot.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  currentEl.textContent = formatted;
+
+  const isUp = spot >= cachedStrike;
+  const isDown = spot < cachedStrike;
+  currentEl.className = 'price-block-value current ' + (isUp ? 'up' : isDown ? 'down' : '');
+
+  if (deltaEl) {
+    const delta = spot - cachedStrike;
+    const deltaStr = (delta >= 0 ? '+' : '') + '$' + Math.abs(delta).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    deltaEl.textContent = deltaStr;
+    deltaEl.className = 'price-delta ' + (isUp ? 'up' : 'down');
   }
 }
 
