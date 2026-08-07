@@ -1,11 +1,14 @@
 """Binance klines fetcher with parquet caching — Phase 1.1 + 1.2."""
 import os
 import time
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
 import requests
+
+log = logging.getLogger("verge.data")
 
 BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
 COINBASE_CANDLES_URL = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
@@ -217,7 +220,7 @@ def get_coinbase_candles(
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
-        print(f"  Warning: Coinbase request failed: {e}")
+        log.warning(f"Coinbase request failed: {e}")
         return pd.DataFrame(columns=COLUMNS)
 
     if not data:
@@ -252,6 +255,7 @@ def get_price_with_fallback(
     try:
         df = get_binance_klines(symbol, interval, start_time, end_time)
         if len(df) > 0:
+            log.info("Using Binance data")
             return df
     except Exception:
         pass
@@ -260,13 +264,13 @@ def get_price_with_fallback(
     try:
         df = get_coinbase_candles(granularity=300, limit=300)
         if len(df) > 0:
-            print("  Using Coinbase candles (with volume)")
+            log.info("Using Coinbase data (with volume)")
             return df
     except Exception:
         pass
 
     # Coinbase failed — try CoinGecko (no volume)
-    print("  Binance/Coinbase unavailable, falling back to CoinGecko...")
+    log.warning("Binance/Coinbase unavailable, falling back to CoinGecko (no volume)")
     return get_coingecko_ohlc(days=1)
 
 
