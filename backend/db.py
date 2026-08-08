@@ -322,7 +322,8 @@ def get_recent_signals(client: Client, limit: int = 10, duration: str | None = N
 def get_performance_summary(client: Client, duration: str | None = None) -> dict:
     """Rolling performance over last 200 signals.
 
-    Returns total signals in window, profitable count, and cumulative ROI%.
+    Returns total signals in window, profitable count, cumulative ROI%,
+    and recent resolved trades (max 10, most recent first).
     """
     query = (
         client.table("signals")
@@ -335,12 +336,13 @@ def get_performance_summary(client: Client, duration: str | None = None) -> dict
 
     total = len(signals)
     if total == 0:
-        return {"total_signals": 0, "window": 200, "profitable": 0, "roi_pct": 0.0}
+        return {"total_signals": 0, "window": 200, "profitable": 0, "resolved": 0, "roi_pct": 0.0, "recent_resolved": []}
 
     # Get resolution data for non-SKIP signals
     profitable = 0
     total_pnl = 0.0
     resolved_count = 0
+    recent_resolved = []
 
     for sig in signals:
         if sig.get("final_decision") == "SKIP":
@@ -348,18 +350,27 @@ def get_performance_summary(client: Client, duration: str | None = None) -> dict
         try:
             pt = (
                 client.table("paper_trades")
-                .select("resolved_outcome, simulated_pnl")
+                .select("resolved_outcome, simulated_pnl, decision")
                 .eq("market_window_start", sig["market_window_start"])
                 .eq("market_duration", sig.get("market_duration", "1h"))
                 .limit(1)
                 .execute()
             )
             if pt.data and pt.data[0].get("resolved_outcome"):
+                trade = pt.data[0]
                 resolved_count += 1
-                pnl = pt.data[0].get("simulated_pnl", 0) or 0
+                pnl = trade.get("simulated_pnl", 0) or 0
                 total_pnl += pnl
                 if pnl > 0:
                     profitable += 1
+                if len(recent_resolved) < 10:
+                    recent_resolved.append({
+                        "market_window_start": sig["market_window_start"],
+                        "market_duration": sig.get("market_duration", "1h"),
+                        "decision": trade.get("decision", sig.get("final_decision")),
+                        "resolved_outcome": trade["resolved_outcome"],
+                        "simulated_pnl": round(pnl, 4),
+                    })
         except Exception:
             continue
 
@@ -371,6 +382,7 @@ def get_performance_summary(client: Client, duration: str | None = None) -> dict
         "profitable": profitable,
         "resolved": resolved_count,
         "roi_pct": round(roi_pct, 1),
+        "recent_resolved": recent_resolved,
     }
 
 

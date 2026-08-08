@@ -146,6 +146,25 @@
   }
 
   /* --- Decision Band --- */
+  .market-header {
+    margin-bottom: 16px;
+  }
+
+  .market-name {
+    font-size: 13px;
+    font-family: var(--font-mono);
+    color: var(--chalk);
+    font-weight: 500;
+    letter-spacing: 0.5px;
+  }
+
+  .market-timeframe {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--static);
+    margin-top: 2px;
+  }
+
   .decision-band {
     display: flex;
     align-items: stretch;
@@ -255,13 +274,17 @@
     display: block;
   }
 
-  .countdown-row {
+  .chart-countdown {
+    position: absolute;
+    top: 6px;
+    right: 8px;
     display: flex;
     align-items: center;
-    justify-content: center;
-    gap: 6px;
-    padding: 8px 0;
-    margin-bottom: 4px;
+    gap: 4px;
+    z-index: 10;
+    background: rgba(11,13,16,0.7);
+    padding: 3px 8px;
+    border-radius: 3px;
   }
 
   .countdown-value {
@@ -475,6 +498,61 @@
   .perf-value.positive { color: var(--signal-up); }
   .perf-value.negative { color: var(--signal-down); }
 
+  .resolved-trades {
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+
+  .resolved-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 20px;
+    font-size: 12px;
+    font-family: var(--font-mono);
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+  }
+
+  .resolved-row:last-child {
+    border-bottom: none;
+  }
+
+  .resolved-time {
+    color: var(--static);
+    min-width: 120px;
+  }
+
+  .resolved-signal {
+    font-weight: 500;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 11px;
+  }
+
+  .resolved-signal.bet-up {
+    background: rgba(51,193,126,0.12);
+    color: var(--signal-up);
+  }
+
+  .resolved-signal.bet-down {
+    background: rgba(226,76,76,0.12);
+    color: var(--signal-down);
+  }
+
+  .resolved-outcome {
+    font-size: 11px;
+    min-width: 30px;
+    text-align: center;
+  }
+
+  .resolved-pnl {
+    font-weight: 500;
+    min-width: 80px;
+    text-align: right;
+  }
+
+  .resolved-pnl.won { color: var(--signal-up); }
+  .resolved-pnl.lost { color: var(--signal-down); }
+
   .signal-log {
     padding: 16px 0;
     border-bottom: 1px solid rgba(255,255,255,0.06);
@@ -486,6 +564,9 @@
     text-transform: uppercase;
     letter-spacing: 1px;
     margin-bottom: 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
   }
 
   .signal-log-list {
@@ -916,9 +997,6 @@
   }
 
   .view-all-link {
-    display: block;
-    text-align: center;
-    padding: 10px 0;
     font-family: var(--font-mono);
     font-size: 11px;
     color: var(--static);
@@ -926,6 +1004,7 @@
     text-decoration: none;
     letter-spacing: 0.5px;
     transition: color 0.15s;
+    text-transform: none;
   }
 
   .view-all-link:hover {
@@ -1064,7 +1143,7 @@
 
     <div class="tutorial-step" data-step="1">
       <h3>Reading the dashboard</h3>
-      <p>The top shows the current market (BTC, hourly) and a countdown to when the hour closes. Below that is the big decision — BET HIGHER, BET LOWER, or SKIP.</p>
+      <p>The top shows the current market (BTC, hourly) and a countdown to when the hour closes. Below that is the big decision — BET UP, BET DOWN, or SKIP.</p>
       <p>The three blocks below the decision show the evidence: what each indicator found and how much it contributed to the score. The odds bar shows the market price (white dot) versus what the indicators think the probability should be (amber dot) — the gap between them is the potential opportunity.</p>
       <p>The bottom row shows your last 10 resolved trades and your running win rate.</p>
     </div>
@@ -1487,7 +1566,7 @@ function renderDashboard(signal, stats, performance) {
 
   const decision = signal.final_decision || 'SKIP';
   const decisionClass = decision === 'BET HIGHER' ? 'up' : decision === 'BET LOWER' ? 'down' : 'skip';
-  const decisionIcon = decision === 'BET HIGHER' ? '\u25B2' : decision === 'BET LOWER' ? '\u25BC' : '\u2726';
+  const decisionDisplay = decision === 'BET HIGHER' ? '\u25B2 BET UP' : decision === 'BET LOWER' ? '\u25BC BET DOWN' : '\u2726 SKIP';
 
   const confidence = signal.confidence || 'none';
   const confidenceClass = confidence === 'high' ? 'high' : confidence === 'medium' ? 'medium' : 'low';
@@ -1525,6 +1604,16 @@ function renderDashboard(signal, stats, performance) {
   const countdownMins = String(Math.floor(secondsRemaining / 60)).padStart(2, '0');
   const countdownSecs = String(secondsRemaining % 60).padStart(2, '0');
 
+  // Market time range display
+  let marketTimeRange = '';
+  if (signal.market?.hour_open_time && signal.market?.hour_end_time) {
+    const openDt = new Date(signal.market.hour_open_time);
+    const endDt = new Date(signal.market.hour_end_time);
+    const fmtTime = (d) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/New_York' });
+    const fmtDate = (d) => d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'America/New_York' });
+    marketTimeRange = `${fmtDate(openDt)} · ${fmtTime(openDt)} – ${fmtTime(endDt)} ET`;
+  }
+
   const html = `
     <!-- Status Band -->
     <div class="status-band">
@@ -1545,6 +1634,10 @@ function renderDashboard(signal, stats, performance) {
     <!-- Decision Band -->
     <div class="decision-band">
       <div class="decision-left">
+        <div class="market-header">
+          <div class="market-name">BTC Up or Down · ${signal.duration === '15m' ? '15 Mins' : '1 Hour'}</div>
+          <div class="market-timeframe">${marketTimeRange}</div>
+        </div>
         <div class="price-panel">
           <div class="price-block">
             <span class="price-block-label">Price To Beat</span>
@@ -1559,21 +1652,21 @@ function renderDashboard(signal, stats, performance) {
           </div>
         </div>
         <div class="approx-note" id="approx-note" style="display:none;">Chainlink price · Binance volume (approx)</div>
-        <div class="countdown-row" id="countdown-row">
-          <span class="countdown-label">MINS</span>
-          <span class="countdown-value" id="countdown-mins">${countdownMins}</span>
-          <span class="countdown-sep">:</span>
-          <span class="countdown-value" id="countdown-secs">${countdownSecs}</span>
-          <span class="countdown-label">SECS</span>
-        </div>
         <div class="chart-row">
           <div class="chart-container">
             <canvas id="price-chart"></canvas>
+            <div class="chart-countdown" id="countdown-row">
+              <span class="countdown-label">MINS</span>
+              <span class="countdown-value" id="countdown-mins">${countdownMins}</span>
+              <span class="countdown-sep">:</span>
+              <span class="countdown-value" id="countdown-secs">${countdownSecs}</span>
+              <span class="countdown-label">SECS</span>
+            </div>
           </div>
         </div>
       </div>
       <div class="decision-right">
-        <div class="decision-label ${decisionClass}">${decisionIcon} ${decision}</div>
+        <div class="decision-label ${decisionClass}">${decisionDisplay}</div>
         <div class="decision-meta">
           <span class="confidence-badge ${confidenceClass}">${confidence}</span>
           <span>Score ${signal.score > 0 ? '+' : ''}${(signal.score || 0).toFixed(2)}</span>
@@ -1632,6 +1725,26 @@ function renderDashboard(signal, stats, performance) {
       </div>
     </div>
 
+    ${(performance?.recent_resolved && performance.recent_resolved.length > 0)
+      ? `<div class="resolved-trades">${performance.recent_resolved.map(t => {
+          const dt = new Date(t.market_window_start);
+          const time = dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/New_York' });
+          const day = dt.toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', timeZone: 'America/New_York' });
+          const dec = t.decision || 'SKIP';
+          const decCls = dec === 'BET HIGHER' ? 'bet-up' : dec === 'BET LOWER' ? 'bet-down' : '';
+          const decDisplay = dec === 'BET HIGHER' ? 'BET UP' : dec === 'BET LOWER' ? 'BET DOWN' : dec;
+          const won = t.simulated_pnl > 0;
+          const outcomeIcon = t.resolved_outcome === 'UP' ? '\u25B2 UP' : '\u25BC DOWN';
+          return `<div class="resolved-row">
+            <span class="resolved-time">${day} ${time}</span>
+            <span class="resolved-signal ${decCls}">${decDisplay}</span>
+            <span class="resolved-outcome">${outcomeIcon}</span>
+            <span class="resolved-pnl ${won ? 'won' : 'lost'}">${won ? '+' : ''}$${Math.abs(t.simulated_pnl).toFixed(2)}</span>
+          </div>`;
+        }).join('')}</div>`
+      : ''
+    }
+
     <!-- Signal Log Band -->
     <div class="signal-log">
       <div class="signal-log-label">Signal Log <a class="view-all-link" id="view-all-link">View all &rarr;</a></div>
@@ -1642,10 +1755,11 @@ function renderDashboard(signal, stats, performance) {
               const hour = dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/New_York' });
               const day = dt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
               const dec = s.final_decision || 'SKIP';
+              const decDisplay = dec === 'BET HIGHER' ? 'BET UP' : dec === 'BET LOWER' ? 'BET DOWN' : 'SKIP';
               const cls = dec === 'BET HIGHER' ? 'bet-up' : dec === 'BET LOWER' ? 'bet-down' : 'skip';
               let outcome = '';
               if (dec === 'SKIP') {
-                outcome = '<span class="signal-outcome skip">—</span>';
+                outcome = '<span class="signal-outcome skip">\u2014</span>';
               } else if (s.resolved_outcome) {
                 const won = (dec === 'BET HIGHER' && s.resolved_outcome === 'UP') || (dec === 'BET LOWER' && s.resolved_outcome === 'DOWN');
                 outcome = won
@@ -1654,7 +1768,7 @@ function renderDashboard(signal, stats, performance) {
               } else {
                 outcome = '<span class="signal-outcome pending">⏳</span>';
               }
-              return `<div class="signal-log-row"><span class="signal-log-hour">${day} ${hour}</span><span class="signal-log-decision ${cls}">${dec}</span>${outcome}</div>`;
+              return `<div class="signal-log-row"><span class="signal-log-hour">${day} ${hour}</span><span class="signal-log-decision ${cls}">${decDisplay}</span>${outcome}</div>`;
             }).join('')
           : '<span style="color: var(--static); font-size: 12px;">No signals yet</span>'
         }
@@ -1802,6 +1916,7 @@ function renderLogTable(signals, total) {
     const time = dt.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/New_York' });
     const dur = s.market_duration === '15m' ? '15M' : '1H';
     const dec = s.final_decision || 'SKIP';
+    const decDisplay = dec === 'BET HIGHER' ? 'BET UP' : dec === 'BET LOWER' ? 'BET DOWN' : 'SKIP';
     const decCls = dec === 'BET HIGHER' ? 'bet-up' : dec === 'BET LOWER' ? 'bet-down' : 'skip';
 
     let result = '—';
@@ -1811,13 +1926,13 @@ function renderLogTable(signals, total) {
         ? `<span class="signal-outcome won">W +$${Math.abs(s.simulated_pnl || 0).toFixed(2)}</span>`
         : `<span class="signal-outcome lost">L $${(s.simulated_pnl || 0).toFixed(2)}</span>`;
     } else if (dec !== 'SKIP') {
-      result = '<span class="signal-outcome pending">⏳</span>';
+      result = '<span class="signal-outcome pending">\u23F3</span>';
     }
 
     return `<tr>
       <td>${time}</td>
       <td>${dur}</td>
-      <td><span class="signal-log-decision ${decCls}">${dec}</span></td>
+      <td><span class="signal-log-decision ${decCls}">${decDisplay}</span></td>
       <td>${(s.score > 0 ? '+' : '') + (s.score || 0).toFixed(2)}</td>
       <td>${(s.edge_pct > 0 ? '+' : '') + (s.edge_pct || 0).toFixed(1)}%</td>
       <td>${result}</td>
@@ -1854,6 +1969,7 @@ async function openSignalModal(signalId) {
     const durLabel = sig.market_duration === '15m' ? '15 MINS' : '1 HOUR';
 
     const dec = sig.final_decision || 'SKIP';
+    const decDisplay = dec === 'BET HIGHER' ? 'BET UP' : dec === 'BET LOWER' ? 'BET DOWN' : 'SKIP';
     const decCls = dec === 'BET HIGHER' ? 'up' : dec === 'BET LOWER' ? 'down' : 'skip';
 
     let resolutionHtml = '<div class="modal-resolution pending">⏳ Pending</div>';
@@ -1875,7 +1991,7 @@ async function openSignalModal(signalId) {
 
       <div class="modal-section">
         <div class="modal-section-label">Signal</div>
-        <span class="modal-signal-badge ${decCls}">${dec}</span>
+        <span class="modal-signal-badge ${decCls}">${decDisplay}</span>
       </div>
 
       <div class="modal-section">
