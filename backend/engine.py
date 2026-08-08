@@ -432,11 +432,18 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
     else:
         log.info(f"[{duration}] Official strike unavailable, using fallback")
         if duration == "15m" and hour_open_time is not None:
-            # 15m: Gamma doesn't provide priceToBeat — fetch BTC at window start
-            from data_fetcher import get_price_at_time
-            strike_price = get_price_at_time(hour_open_time)
-            if strike_price:
-                log.info(f"[{duration}] Strike from Coinbase at {hour_open_time}: ${strike_price:,.2f}")
+            # 15m: Prefer Chainlink bars' open (matches Polymarket's resolution source)
+            if len(df_price) > 0:
+                matching = df_price[df_price["open_time"] >= hour_open_time]
+                if len(matching) > 0:
+                    strike_price = float(matching.iloc[0]["open"])
+                    log.info(f"[15m] Strike from Chainlink bars: ${strike_price:,.2f}")
+            # Fallback: Coinbase if Chainlink bars unavailable
+            if strike_price is None:
+                from data_fetcher import get_price_at_time
+                strike_price = get_price_at_time(hour_open_time)
+                if strike_price:
+                    log.info(f"[15m] Strike from Coinbase fallback: ${strike_price:,.2f}")
         elif hour_open_time is not None and len(df_price) > 0:
             # 1h fallback: compute from first candle in window
             matching = df_price[df_price["open_time"] >= hour_open_time]

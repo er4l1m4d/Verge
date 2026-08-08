@@ -191,13 +191,22 @@ def candles():
                     "close": round(float(row["close"]), 2),
                 })
 
-            # 15m strike: use Gamma priceToBeat if available, else fetch at window start
+            # 15m strike: prefer official, then Chainlink bars' open, then Coinbase
             if official_strike:
                 strike = round(official_strike, 2)
             elif market and market.get("window_open"):
-                from data_fetcher import get_price_at_time
-                strike = get_price_at_time(market["window_open"])
-                strike = round(strike, 2) if strike else round(float(df_recent.iloc[0]["open"]), 2)
+                # Try Chainlink bars first (matches Polymarket's resolution source)
+                strike_val = None
+                if len(df_recent) > 0:
+                    import time as _t
+                    matching = df_recent[df_recent["open_time"] >= market["window_open"]]
+                    if len(matching) > 0:
+                        strike_val = float(matching.iloc[0]["open"])
+                # Fallback: Coinbase
+                if strike_val is None:
+                    from data_fetcher import get_price_at_time
+                    strike_val = get_price_at_time(market["window_open"])
+                strike = round(strike_val, 2) if strike_val else round(float(df_recent.iloc[0]["open"]), 2)
             else:
                 strike = round(float(df_recent.iloc[0]["open"]), 2)
             spot = get_spot_price()
