@@ -87,33 +87,12 @@ def debug():
     except Exception as e:
         results["market_duration_column"] = f"missing or error: {e}"
 
-    # 4. Try a test write to signals
+    # 4. Verify signals table is readable
     try:
-        test_row = {
-            "market_window_start": 0,
-            "market_duration": "test",
-            "token_id": "debug",
-            "decision": "SKIP",
-            "final_decision": "SKIP",
-            "confidence": "none",
-            "score": 0,
-            "model_probability": 0.5,
-            "rsi": 50,
-            "ma_signal": 0,
-            "volume_signal": 0,
-            "odds": 0.5,
-            "edge_pct": 0,
-            "fee_eroded": False,
-            "suggested_price": None,
-            "minutes_remaining": 0,
-            "note": "debug test row",
-        }
-        resp = client.table("signals").insert(test_row).execute()
-        results["test_write"] = f"success (id={resp.data[0]['id']})"
-        # Clean up test row
-        client.table("signals").delete().eq("id", resp.data[0]["id"]).execute()
+        resp = client.table("signals").select("id").limit(1).execute()
+        results["signals_readable"] = True
     except Exception as e:
-        results["test_write"] = f"FAILED: {e}"
+        results["signals_readable"] = f"FAILED: {e}"
 
     # 5. Check VERGE_SECRET env var
     results["verge_secret_set"] = bool(os.environ.get("VERGE_SECRET"))

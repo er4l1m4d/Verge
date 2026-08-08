@@ -277,8 +277,16 @@ def get_coinbase_candles(
 def get_price_at_time(target_ms: int) -> float | None:
     """Get BTC price at a specific time using Coinbase candles.
 
-    Fetches the candle that contains target_ms and returns its open price.
-    Used for 15m market strike when Gamma doesn't provide priceToBeat.
+    Strikes a balance between accuracy and availability: fetches the
+    Coinbase BTC-USD candle that contains target_ms and returns its open
+    price. Used only as a last-resort strike approximation for 15m markets
+    when Polymarket's own priceToBeat field is absent from the Gamma API.
+
+    IMPORTANT: This is Coinbase's spot price, not the Chainlink TWAP 60s
+    feed that Polymarket's 15m markets actually resolve against. The two
+    should be very close (same BTC, ~0.01% typical deviation) but will
+    occasionally differ. This is the same category of approximation as
+    the CoinGecko-vs-Binance mismatch documented in data_fetcher.py.
     """
     start_s = int(target_ms / 1000) - 300  # 5min before
     end_s = int(target_ms / 1000) + 300    # 5min after

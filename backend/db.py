@@ -275,14 +275,19 @@ def get_unresolved_trades(client: Client, duration: str | None = None) -> list[d
 def get_recent_signals(client: Client, limit: int = 10, duration: str | None = None) -> list[dict]:
     """Get the most recent signals (all decisions, including SKIP) with resolution.
 
-    Joins with paper_trades to show whether each signal's trade won/lost/pending.
+    Uses PostgREST embedded resource query to fetch paper_trades in a single
+    round-trip instead of N+1 per-signal queries.
 
     Args:
         duration: if provided, filter to this duration only
     """
     query = (
         client.table("signals")
-        .select("id, final_decision, market_window_start, timestamp, score, market_duration, strike_price, current_price, odds, edge_pct, rsi, ma_signal, volume_signal")
+        .select(
+            "id, final_decision, market_window_start, timestamp, score, market_duration, "
+            "strike_price, current_price, odds, edge_pct, rsi, ma_signal, volume_signal, "
+            "paper_trades!signal_id(resolved_outcome, simulated_pnl, decision)"
+        )
         .order("id", desc=True)
     )
     if duration:
@@ -290,29 +295,13 @@ def get_recent_signals(client: Client, limit: int = 10, duration: str | None = N
     result = query.limit(limit).execute()
     signals = result.data
 
-    # Get resolution data from paper_trades for non-SKIP signals
+    # Extract resolution data from embedded paper_trades
     for sig in signals:
-        if sig.get("final_decision") == "SKIP":
-            sig["resolved_outcome"] = None
-            sig["simulated_pnl"] = None
-            continue
-
-        try:
-            pt = (
-                client.table("paper_trades")
-                .select("resolved_outcome, simulated_pnl")
-                .eq("market_window_start", sig["market_window_start"])
-                .eq("market_duration", sig.get("market_duration", "1h"))
-                .limit(1)
-                .execute()
-            )
-            if pt.data:
-                sig["resolved_outcome"] = pt.data[0].get("resolved_outcome")
-                sig["simulated_pnl"] = pt.data[0].get("simulated_pnl")
-            else:
-                sig["resolved_outcome"] = None
-                sig["simulated_pnl"] = None
-        except Exception:
+        trades = sig.pop("paper_trades", [])
+        if trades:
+            sig["resolved_outcome"] = trades[0].get("resolved_outcome")
+            sig["simulated_pnl"] = trades[0].get("simulated_pnl")
+        else:
             sig["resolved_outcome"] = None
             sig["simulated_pnl"] = None
 
@@ -322,12 +311,16 @@ def get_recent_signals(client: Client, limit: int = 10, duration: str | None = N
 def get_performance_summary(client: Client, duration: str | None = None) -> dict:
     """Rolling performance over last 200 signals.
 
+    Uses PostgREST embedded resource query to avoid N+1 per-signal round-trips.
     Returns total signals in window, profitable count, cumulative ROI%,
     and recent resolved trades (max 10, most recent first).
     """
     query = (
         client.table("signals")
-        .select("id, final_decision, market_window_start, market_duration")
+        .select(
+            "id, final_decision, market_window_start, market_duration, odds, "
+            "paper_trades!signal_id(resolved_outcome, simulated_pnl, decision)"
+        )
         .order("id", desc=True)
     )
     if duration:
@@ -338,41 +331,32 @@ def get_performance_summary(client: Client, duration: str | None = None) -> dict
     if total == 0:
         return {"total_signals": 0, "window": 200, "profitable": 0, "resolved": 0, "roi_pct": 0.0, "recent_resolved": []}
 
-    # Get resolution data for non-SKIP signals
     profitable = 0
     total_pnl = 0.0
     resolved_count = 0
     recent_resolved = []
 
     for sig in signals:
-        if sig.get("final_decision") == "SKIP":
+        trades = sig.get("paper_trades", [])
+        if not trades:
             continue
-        try:
-            pt = (
-                client.table("paper_trades")
-                .select("resolved_outcome, simulated_pnl, decision")
-                .eq("market_window_start", sig["market_window_start"])
-                .eq("market_duration", sig.get("market_duration", "1h"))
-                .limit(1)
-                .execute()
-            )
-            if pt.data and pt.data[0].get("resolved_outcome"):
-                trade = pt.data[0]
-                resolved_count += 1
-                pnl = trade.get("simulated_pnl", 0) or 0
-                total_pnl += pnl
-                if pnl > 0:
-                    profitable += 1
-                if len(recent_resolved) < 10:
-                    recent_resolved.append({
-                        "market_window_start": sig["market_window_start"],
-                        "market_duration": sig.get("market_duration", "1h"),
-                        "decision": trade.get("decision", sig.get("final_decision")),
-                        "resolved_outcome": trade["resolved_outcome"],
-                        "simulated_pnl": round(pnl, 4),
-                    })
-        except Exception:
+        trade = trades[0]
+        resolved = trade.get("resolved_outcome")
+        if not resolved:
             continue
+        resolved_count += 1
+        pnl = trade.get("simulated_pnl", 0) or 0
+        total_pnl += pnl
+        if pnl > 0:
+            profitable += 1
+        if len(recent_resolved) < 10:
+            recent_resolved.append({
+                "market_window_start": sig["market_window_start"],
+                "market_duration": sig.get("market_duration", "1h"),
+                "decision": trade.get("decision", sig.get("final_decision")),
+                "resolved_outcome": resolved,
+                "simulated_pnl": round(pnl, 4),
+            })
 
     roi_pct = (total_pnl / resolved_count * 100) if resolved_count > 0 else 0.0
 
@@ -391,6 +375,7 @@ def get_paginated_signals(
 ) -> dict:
     """Paginated signal log with resolution data.
 
+    Uses PostgREST embedded resource query to avoid N+1 per-signal round-trips.
     Returns {signals: [...], total: N}.
     """
     # Count total
@@ -400,10 +385,14 @@ def get_paginated_signals(
     count_result = count_query.execute()
     total = count_result.count if hasattr(count_result, "count") else 0
 
-    # Fetch page
+    # Fetch page with embedded paper_trades
     query = (
         client.table("signals")
-        .select("id, final_decision, market_window_start, timestamp, score, market_duration, strike_price, current_price, odds, edge_pct, rsi, ma_signal, volume_signal")
+        .select(
+            "id, final_decision, market_window_start, timestamp, score, market_duration, "
+            "strike_price, current_price, odds, edge_pct, rsi, ma_signal, volume_signal, "
+            "paper_trades!signal_id(resolved_outcome, simulated_pnl, decision)"
+        )
         .order("id", desc=True)
     )
     if duration:
@@ -411,28 +400,13 @@ def get_paginated_signals(
     result = query.range(offset, offset + limit - 1).execute()
     signals = result.data
 
-    # Attach resolution data
+    # Extract resolution data from embedded paper_trades
     for sig in signals:
-        if sig.get("final_decision") == "SKIP":
-            sig["resolved_outcome"] = None
-            sig["simulated_pnl"] = None
-            continue
-        try:
-            pt = (
-                client.table("paper_trades")
-                .select("resolved_outcome, simulated_pnl")
-                .eq("market_window_start", sig["market_window_start"])
-                .eq("market_duration", sig.get("market_duration", "1h"))
-                .limit(1)
-                .execute()
-            )
-            if pt.data:
-                sig["resolved_outcome"] = pt.data[0].get("resolved_outcome")
-                sig["simulated_pnl"] = pt.data[0].get("simulated_pnl")
-            else:
-                sig["resolved_outcome"] = None
-                sig["simulated_pnl"] = None
-        except Exception:
+        trades = sig.pop("paper_trades", [])
+        if trades:
+            sig["resolved_outcome"] = trades[0].get("resolved_outcome")
+            sig["simulated_pnl"] = trades[0].get("simulated_pnl")
+        else:
             sig["resolved_outcome"] = None
             sig["simulated_pnl"] = None
 
