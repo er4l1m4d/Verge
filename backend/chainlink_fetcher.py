@@ -75,6 +75,31 @@ AGGREGATOR_ABI = [
     },
 ]
 
+# Singleton Web3 + contract instances (avoids memory leak from repeated instantiation)
+_w3 = None
+_contract = None
+
+
+def _get_web3():
+    """Return a cached Web3 instance, creating it only on first call."""
+    global _w3
+    if _w3 is None:
+        from web3 import Web3
+        _w3 = Web3(Web3.HTTPProvider(RPC_URL, request_kwargs={"timeout": 15}))
+    return _w3
+
+
+def _get_contract():
+    """Return a cached contract instance, creating it only on first call."""
+    global _contract
+    if _contract is None:
+        w3 = _get_web3()
+        _contract = w3.eth.contract(
+            address=Web3.to_checksum_address(FEED_ADDRESS),
+            abi=AGGREGATOR_ABI,
+        )
+    return _contract
+
 
 def get_chainlink_price() -> Optional[float]:
     """Read the current BTC/USD price from the Chainlink on-chain Data Feed.
@@ -90,15 +115,12 @@ def get_chainlink_price() -> Optional[float]:
         return None
 
     try:
-        w3 = Web3(Web3.HTTPProvider(RPC_URL))
+        w3 = _get_web3()
         if not w3.is_connected():
             log.warning(f"Cannot connect to Polygon RPC: {RPC_URL}")
             return None
 
-        contract = w3.eth.contract(
-            address=Web3.to_checksum_address(FEED_ADDRESS),
-            abi=AGGREGATOR_ABI,
-        )
+        contract = _get_contract()
 
         # Read latest round data
         round_data = contract.functions.latestRoundData().call()
