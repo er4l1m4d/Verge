@@ -273,20 +273,158 @@ def get_unresolved_trades(client: Client, duration: str | None = None) -> list[d
 
 
 def get_recent_signals(client: Client, limit: int = 10, duration: str | None = None) -> list[dict]:
-    """Get the most recent signals (all decisions, including SKIP).
+    """Get the most recent signals (all decisions, including SKIP) with resolution.
+
+    Joins with paper_trades to show whether each signal's trade won/lost/pending.
 
     Args:
         duration: if provided, filter to this duration only
     """
     query = (
         client.table("signals")
-        .select("final_decision, market_window_start, timestamp, score, market_duration")
+        .select("id, final_decision, market_window_start, timestamp, score, market_duration, strike_price, current_price, odds, edge_pct, rsi, ma_signal, volume_signal")
         .order("id", desc=True)
     )
     if duration:
         query = query.eq("market_duration", duration)
     result = query.limit(limit).execute()
-    return result.data
+    signals = result.data
+
+    # Get resolution data from paper_trades for non-SKIP signals
+    for sig in signals:
+        if sig.get("final_decision") == "SKIP":
+            sig["resolved_outcome"] = None
+            sig["simulated_pnl"] = None
+            continue
+
+        try:
+            pt = (
+                client.table("paper_trades")
+                .select("resolved_outcome, simulated_pnl")
+                .eq("market_window_start", sig["market_window_start"])
+                .eq("market_duration", sig.get("market_duration", "1h"))
+                .limit(1)
+                .execute()
+            )
+            if pt.data:
+                sig["resolved_outcome"] = pt.data[0].get("resolved_outcome")
+                sig["simulated_pnl"] = pt.data[0].get("simulated_pnl")
+            else:
+                sig["resolved_outcome"] = None
+                sig["simulated_pnl"] = None
+        except Exception:
+            sig["resolved_outcome"] = None
+            sig["simulated_pnl"] = None
+
+    return signals
+
+
+def get_performance_summary(client: Client, duration: str | None = None) -> dict:
+    """Rolling performance over last 200 signals.
+
+    Returns total signals in window, profitable count, and cumulative ROI%.
+    """
+    query = (
+        client.table("signals")
+        .select("id, final_decision, market_window_start, market_duration")
+        .order("id", desc=True)
+    )
+    if duration:
+        query = query.eq("market_duration", duration)
+    signals = query.limit(200).execute().data
+
+    total = len(signals)
+    if total == 0:
+        return {"total_signals": 0, "window": 200, "profitable": 0, "roi_pct": 0.0}
+
+    # Get resolution data for non-SKIP signals
+    profitable = 0
+    total_pnl = 0.0
+    resolved_count = 0
+
+    for sig in signals:
+        if sig.get("final_decision") == "SKIP":
+            continue
+        try:
+            pt = (
+                client.table("paper_trades")
+                .select("resolved_outcome, simulated_pnl")
+                .eq("market_window_start", sig["market_window_start"])
+                .eq("market_duration", sig.get("market_duration", "1h"))
+                .limit(1)
+                .execute()
+            )
+            if pt.data and pt.data[0].get("resolved_outcome"):
+                resolved_count += 1
+                pnl = pt.data[0].get("simulated_pnl", 0) or 0
+                total_pnl += pnl
+                if pnl > 0:
+                    profitable += 1
+        except Exception:
+            continue
+
+    roi_pct = (total_pnl / resolved_count * 100) if resolved_count > 0 else 0.0
+
+    return {
+        "total_signals": total,
+        "window": 200,
+        "profitable": profitable,
+        "resolved": resolved_count,
+        "roi_pct": round(roi_pct, 1),
+    }
+
+
+def get_paginated_signals(
+    client: Client, offset: int = 0, limit: int = 25, duration: str | None = None
+) -> dict:
+    """Paginated signal log with resolution data.
+
+    Returns {signals: [...], total: N}.
+    """
+    # Count total
+    count_query = client.table("signals").select("id", count="exact")
+    if duration:
+        count_query = count_query.eq("market_duration", duration)
+    count_result = count_query.execute()
+    total = count_result.count if hasattr(count_result, "count") else 0
+
+    # Fetch page
+    query = (
+        client.table("signals")
+        .select("id, final_decision, market_window_start, timestamp, score, market_duration, strike_price, current_price, odds, edge_pct, rsi, ma_signal, volume_signal")
+        .order("id", desc=True)
+    )
+    if duration:
+        query = query.eq("market_duration", duration)
+    result = query.range(offset, offset + limit - 1).execute()
+    signals = result.data
+
+    # Attach resolution data
+    for sig in signals:
+        if sig.get("final_decision") == "SKIP":
+            sig["resolved_outcome"] = None
+            sig["simulated_pnl"] = None
+            continue
+        try:
+            pt = (
+                client.table("paper_trades")
+                .select("resolved_outcome, simulated_pnl")
+                .eq("market_window_start", sig["market_window_start"])
+                .eq("market_duration", sig.get("market_duration", "1h"))
+                .limit(1)
+                .execute()
+            )
+            if pt.data:
+                sig["resolved_outcome"] = pt.data[0].get("resolved_outcome")
+                sig["simulated_pnl"] = pt.data[0].get("simulated_pnl")
+            else:
+                sig["resolved_outcome"] = None
+                sig["simulated_pnl"] = None
+        except Exception:
+            sig["resolved_outcome"] = None
+            sig["simulated_pnl"] = None
+
+    return {"signals": signals, "total": total}
 
 
 def get_stats(client: Client, duration: str | None = None) -> dict:

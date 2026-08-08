@@ -196,6 +196,18 @@
     color: var(--static);
   }
 
+  .current-group {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .current-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
   .price-block-value.current.up {
     color: var(--signal-up);
   }
@@ -210,8 +222,7 @@
     font-weight: 500;
     padding: 2px 6px;
     border-radius: 3px;
-    align-self: flex-start;
-    margin-top: 4px;
+    align-self: center;
   }
 
   .price-delta.up {
@@ -227,7 +238,6 @@
   .chart-row {
     display: flex;
     align-items: flex-end;
-    gap: 16px;
   }
 
   .chart-container {
@@ -245,21 +255,29 @@
     display: block;
   }
 
-  .countdown-block {
+  .countdown-row {
     display: flex;
-    flex-direction: column;
     align-items: center;
-    gap: 2px;
-    min-width: 60px;
+    justify-content: center;
+    gap: 6px;
+    padding: 8px 0;
+    margin-bottom: 4px;
   }
 
   .countdown-value {
-    font-size: 20px;
+    font-size: 18px;
     font-family: var(--font-mono);
     font-weight: 500;
     color: var(--chalk);
     font-variant-numeric: tabular-nums;
     letter-spacing: 1px;
+  }
+
+  .countdown-sep {
+    font-size: 18px;
+    font-family: var(--font-mono);
+    color: var(--static);
+    opacity: 0.5;
   }
 
   .countdown-label {
@@ -424,6 +442,39 @@
   }
 
   /* --- Signal Log Band --- */
+  .performance-bar {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1px;
+    background: rgba(255,255,255,0.06);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+
+  .perf-block {
+    background: var(--void);
+    padding: 14px 20px;
+    text-align: center;
+  }
+
+  .perf-label {
+    font-size: 10px;
+    color: var(--static);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 4px;
+  }
+
+  .perf-value {
+    font-family: var(--font-mono);
+    font-size: 20px;
+    font-weight: 500;
+    color: var(--chalk);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .perf-value.positive { color: var(--signal-up); }
+  .perf-value.negative { color: var(--signal-down); }
+
   .signal-log {
     padding: 16px 0;
     border-bottom: 1px solid rgba(255,255,255,0.06);
@@ -483,6 +534,33 @@
     color: var(--idle-slate);
   }
 
+  .signal-outcome {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 500;
+    padding: 2px 6px;
+    border-radius: 3px;
+  }
+
+  .signal-outcome.won {
+    color: var(--signal-up);
+    background: rgba(51,193,126,0.1);
+  }
+
+  .signal-outcome.lost {
+    color: var(--signal-down);
+    background: rgba(226,76,76,0.1);
+  }
+
+  .signal-outcome.pending {
+    color: var(--cost-amber);
+    background: rgba(214,165,68,0.1);
+  }
+
+  .signal-outcome.skip {
+    color: var(--static);
+  }
+
   /* --- Footer --- */
   .footer {
     margin-top: auto;
@@ -512,6 +590,20 @@
     justify-content: center;
     color: var(--static);
     font-size: 14px;
+  }
+
+  .loading-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(11,13,16,0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 500;
+    color: var(--static);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    letter-spacing: 1px;
   }
 
   .loading-dots span {
@@ -708,6 +800,247 @@
     .tutorial-modal { padding: 24px; }
     .tutorial-indicators { grid-template-columns: 1fr; }
   }
+
+  /* --- Signal Log Page --- */
+  .signal-log-page {
+    display: none;
+  }
+
+  .signal-log-page.active {
+    display: block;
+  }
+
+  .log-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    margin-bottom: 16px;
+  }
+
+  .log-back {
+    background: none;
+    border: none;
+    color: var(--static);
+    font-size: 18px;
+    cursor: pointer;
+    padding: 4px 8px;
+    font-family: var(--font-mono);
+  }
+
+  .log-back:hover { color: var(--chalk); }
+
+  .log-title {
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--chalk);
+  }
+
+  .log-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+
+  .log-table th {
+    text-align: left;
+    font-size: 10px;
+    color: var(--static);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    padding: 8px 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    font-weight: 500;
+  }
+
+  .log-table td {
+    padding: 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--chalk);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .log-table tr:hover {
+    background: rgba(255,255,255,0.02);
+  }
+
+  .log-open-btn {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.1);
+    color: var(--chalk);
+    padding: 4px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    transition: background 0.15s;
+  }
+
+  .log-open-btn:hover {
+    background: rgba(255,255,255,0.12);
+  }
+
+  .log-pagination {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 16px;
+    padding: 20px 0;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--static);
+  }
+
+  .log-pagination button {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.1);
+    color: var(--chalk);
+    padding: 6px 14px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    transition: background 0.15s;
+  }
+
+  .log-pagination button:hover:not(:disabled) {
+    background: rgba(255,255,255,0.12);
+  }
+
+  .log-pagination button:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+
+  .view-all-link {
+    display: block;
+    text-align: center;
+    padding: 10px 0;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--static);
+    cursor: pointer;
+    text-decoration: none;
+    letter-spacing: 0.5px;
+    transition: color 0.15s;
+  }
+
+  .view-all-link:hover {
+    color: var(--chalk);
+  }
+
+  /* --- Signal Detail Modal --- */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.75);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+
+  .modal-content {
+    background: var(--deck);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 8px;
+    max-width: 520px;
+    width: 100%;
+    max-height: 80vh;
+    overflow-y: auto;
+    padding: 28px;
+  }
+
+  .modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 20px;
+  }
+
+  .modal-market {
+    font-size: 14px;
+    font-family: var(--font-mono);
+    color: var(--chalk);
+    font-weight: 500;
+  }
+
+  .modal-close {
+    background: none;
+    border: none;
+    color: var(--static);
+    font-size: 20px;
+    cursor: pointer;
+    padding: 4px 8px;
+  }
+
+  .modal-close:hover { color: var(--chalk); }
+
+  .modal-section {
+    margin-bottom: 16px;
+  }
+
+  .modal-section-label {
+    font-size: 10px;
+    color: var(--static);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 6px;
+  }
+
+  .modal-signal-badge {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 14px;
+    font-weight: 500;
+  }
+
+  .modal-signal-badge.up { background: rgba(51,193,126,0.15); color: var(--signal-up); }
+  .modal-signal-badge.down { background: rgba(226,76,76,0.15); color: var(--signal-down); }
+  .modal-signal-badge.skip { background: rgba(124,134,149,0.15); color: var(--idle-slate); }
+
+  .modal-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+
+  .modal-stat {
+    background: rgba(255,255,255,0.03);
+    padding: 10px 12px;
+    border-radius: 4px;
+  }
+
+  .modal-stat-label {
+    font-size: 10px;
+    color: var(--static);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+  }
+
+  .modal-stat-value {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    color: var(--chalk);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .modal-resolution {
+    padding: 12px;
+    border-radius: 4px;
+    text-align: center;
+  }
+
+  .modal-resolution.up { background: rgba(51,193,126,0.1); color: var(--signal-up); }
+  .modal-resolution.down { background: rgba(226,76,76,0.1); color: var(--signal-down); }
+  .modal-resolution.pending { background: rgba(214,165,68,0.1); color: var(--cost-amber); }
 </style>
 </head>
 <body>
@@ -783,6 +1116,34 @@
   </div>
 </div>
 
+<!-- Signal Log Page (hidden by default) -->
+<div class="container signal-log-page" id="signal-log-page">
+  <div class="log-header">
+    <button class="log-back" id="log-back">&larr;</button>
+    <span class="log-title">Signal Log</span>
+  </div>
+  <table class="log-table">
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Duration</th>
+        <th>Signal</th>
+        <th>Score</th>
+        <th>Edge</th>
+        <th>Result</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody id="log-tbody"></tbody>
+  </table>
+  <div class="log-pagination" id="log-pagination"></div>
+</div>
+
+<!-- Signal Detail Modal (hidden by default) -->
+<div class="modal-overlay" id="signal-modal" style="display:none;">
+  <div class="modal-content" id="modal-content"></div>
+</div>
+
 <script>
 // Tutorial modal — step-based
 const tutorialOverlay = document.getElementById('tutorial');
@@ -827,14 +1188,23 @@ function setDuration(dur) {
   currentDuration = dur;
   document.getElementById('dur-1h').classList.toggle('active', dur === '1h');
   document.getElementById('dur-15m').classList.toggle('active', dur === '15m');
-  document.getElementById('status-asset').textContent = `BTC · ${dur === '15m' ? '15M' : '1H'}`;
 
   // Show/hide approximation note for 15m
   const noteEl = document.getElementById('approx-note');
   if (noteEl) noteEl.style.display = dur === '15m' ? 'block' : 'none';
 
+  // Show loading overlay while fetching new duration data
+  const overlay = document.createElement('div');
+  overlay.className = 'loading-overlay';
+  overlay.id = 'duration-loading';
+  overlay.innerHTML = 'Loading<span class="loading-dots"><span>.</span><span>.</span><span>.</span></span>';
+  document.body.appendChild(overlay);
+
   // Refresh all data with new duration
-  poll();
+  poll().finally(() => {
+    const el = document.getElementById('duration-loading');
+    if (el) el.remove();
+  });
   refreshChart();
 }
 
@@ -891,6 +1261,17 @@ async function fetchSignal() {
 async function fetchStats() {
   try {
     const resp = await fetch(`${API_BASE}/api/stats?duration=${currentDuration}`, { headers: authHeaders() });
+    if (resp.status === 401) { localStorage.removeItem('verge_secret'); return null; }
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (e) {
+    return null;
+  }
+}
+
+async function fetchPerformance() {
+  try {
+    const resp = await fetch(`${API_BASE}/api/performance?duration=${currentDuration}`, { headers: authHeaders() });
     if (resp.status === 401) { localStorage.removeItem('verge_secret'); return null; }
     if (!resp.ok) return null;
     return await resp.json();
@@ -1098,7 +1479,7 @@ function drawChart(candles, strike, spot, nowMs) {
   ctx.fillText(`$${minP.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0})}`, W - 2, pad.top + chartH);
 }
 
-function renderDashboard(signal, stats) {
+function renderDashboard(signal, stats, performance) {
   if (!signal) {
     document.getElementById('app').innerHTML = '<div class="error-state">Cannot reach Verge backend</div>';
     return;
@@ -1149,11 +1530,11 @@ function renderDashboard(signal, stats) {
     <div class="status-band">
       <div class="status-wordmark">VERGE</div>
       <div class="status-right">
+        <div class="status-asset" id="status-asset">BTC</div>
         <div class="duration-toggle" id="duration-toggle">
           <button id="dur-1h" class="active" onclick="setDuration('1h')">1H</button>
           <button id="dur-15m" onclick="setDuration('15m')">15M</button>
         </div>
-        <div class="status-asset" id="status-asset">BTC · 1H</div>
         <div class="status-live">
           <div class="heartbeat-dot" id="heartbeat-dot"></div>
           <span>live</span>
@@ -1169,22 +1550,25 @@ function renderDashboard(signal, stats) {
             <span class="price-block-label">Price To Beat</span>
             <span class="price-block-value strike" id="price-strike">${strikeStr}</span>
           </div>
-          <div class="price-block">
+          <div class="price-block current-group">
             <span class="price-block-label">Current Price</span>
-            <span class="price-block-value current ${priceDir}" id="price-current">${currentStr}</span>
+            <div class="current-row">
+              <span class="price-block-value current ${priceDir}" id="price-current">${currentStr}</span>
+              <span class="price-delta ${deltaDir}" id="price-delta">${deltaStr}</span>
+            </div>
           </div>
-          <span class="price-delta ${deltaDir}" id="price-delta">${deltaStr}</span>
         </div>
         <div class="approx-note" id="approx-note" style="display:none;">Chainlink price · Binance volume (approx)</div>
+        <div class="countdown-row" id="countdown-row">
+          <span class="countdown-label">MINS</span>
+          <span class="countdown-value" id="countdown-mins">${countdownMins}</span>
+          <span class="countdown-sep">:</span>
+          <span class="countdown-value" id="countdown-secs">${countdownSecs}</span>
+          <span class="countdown-label">SECS</span>
+        </div>
         <div class="chart-row">
           <div class="chart-container">
             <canvas id="price-chart"></canvas>
-          </div>
-          <div class="countdown-block">
-            <span class="countdown-value" id="countdown-mins">${countdownMins}</span>
-            <span class="countdown-label">Mins</span>
-            <span class="countdown-value" id="countdown-secs">${countdownSecs}</span>
-            <span class="countdown-label">Secs</span>
           </div>
         </div>
       </div>
@@ -1232,9 +1616,25 @@ function renderDashboard(signal, stats) {
       </div>
     </div>
 
+    <!-- Performance Bar -->
+    <div class="performance-bar">
+      <div class="perf-block">
+        <div class="perf-label">Signals</div>
+        <div class="perf-value">${performance?.total_signals || 0} / ${performance?.window || 200}</div>
+      </div>
+      <div class="perf-block">
+        <div class="perf-label">Profitable</div>
+        <div class="perf-value">${performance?.profitable || 0} / ${performance?.resolved || 0}</div>
+      </div>
+      <div class="perf-block">
+        <div class="perf-label">ROI</div>
+        <div class="perf-value ${(performance?.roi_pct || 0) >= 0 ? 'positive' : 'negative'}">${(performance?.roi_pct || 0) >= 0 ? '+' : ''}${(performance?.roi_pct || 0).toFixed(1)}%</div>
+      </div>
+    </div>
+
     <!-- Signal Log Band -->
     <div class="signal-log">
-      <div class="signal-log-label">Signal Log</div>
+      <div class="signal-log-label">Signal Log <a class="view-all-link" id="view-all-link">View all &rarr;</a></div>
       <div class="signal-log-list">
         ${recentSignals.length > 0
           ? recentSignals.map(s => {
@@ -1243,7 +1643,18 @@ function renderDashboard(signal, stats) {
               const day = dt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
               const dec = s.final_decision || 'SKIP';
               const cls = dec === 'BET HIGHER' ? 'bet-up' : dec === 'BET LOWER' ? 'bet-down' : 'skip';
-              return `<div class="signal-log-row"><span class="signal-log-hour">${day} ${hour}</span><span class="signal-log-decision ${cls}">${dec}</span></div>`;
+              let outcome = '';
+              if (dec === 'SKIP') {
+                outcome = '<span class="signal-outcome skip">—</span>';
+              } else if (s.resolved_outcome) {
+                const won = (dec === 'BET HIGHER' && s.resolved_outcome === 'UP') || (dec === 'BET LOWER' && s.resolved_outcome === 'DOWN');
+                outcome = won
+                  ? `<span class="signal-outcome won">W +$${Math.abs(s.simulated_pnl || 0).toFixed(2)}</span>`
+                  : `<span class="signal-outcome lost">L $${(s.simulated_pnl || 0).toFixed(2)}</span>`;
+              } else {
+                outcome = '<span class="signal-outcome pending">⏳</span>';
+              }
+              return `<div class="signal-log-row"><span class="signal-log-hour">${day} ${hour}</span><span class="signal-log-decision ${cls}">${dec}</span>${outcome}</div>`;
             }).join('')
           : '<span style="color: var(--static); font-size: 12px;">No signals yet</span>'
         }
@@ -1259,6 +1670,9 @@ function renderDashboard(signal, stats) {
   document.getElementById('app').innerHTML = html;
   startCountdown();
   refreshChart();
+
+  // Attach view-all link listener
+  document.getElementById('view-all-link')?.addEventListener('click', showSignalLogPage);
 
   // Restore duration toggle state after re-render
   const dur1h = document.getElementById('dur-1h');
@@ -1328,8 +1742,8 @@ function startCountdown() {
 }
 
 async function poll() {
-  const [signal, stats] = await Promise.all([fetchSignal(), fetchStats()]);
-  renderDashboard(signal, stats);
+  const [signal, stats, performance] = await Promise.all([fetchSignal(), fetchStats(), fetchPerformance()]);
+  renderDashboard(signal, stats, performance);
 
   if (!localStorage.getItem('verge_tutorial_seen')) {
     showTutorial();
@@ -1348,6 +1762,184 @@ setInterval(refreshChart, 5000);
 
 // Fast spot price updates every 1.5s (just redraws with cached candles)
 setInterval(refreshSpot, 1500);
+
+// --- Signal Log Page ---
+let logPage = 0;
+const LOG_PAGE_SIZE = 25;
+
+function showSignalLogPage() {
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('signal-log-page').classList.add('active');
+  document.querySelector('.footer').style.display = 'none';
+  logPage = 0;
+  loadLogPage();
+}
+
+function hideSignalLogPage() {
+  document.getElementById('app').style.display = '';
+  document.getElementById('signal-log-page').classList.remove('active');
+  document.querySelector('.footer').style.display = '';
+}
+
+async function loadLogPage() {
+  const offset = logPage * LOG_PAGE_SIZE;
+  try {
+    const resp = await fetch(`${API_BASE}/api/signal-log?offset=${offset}&limit=${LOG_PAGE_SIZE}&duration=${currentDuration}`, { headers: authHeaders() });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    renderLogTable(data.signals, data.total);
+  } catch (e) {
+    console.error('Signal log fetch failed:', e);
+  }
+}
+
+function renderLogTable(signals, total) {
+  const tbody = document.getElementById('log-tbody');
+  if (!tbody) return;
+
+  tbody.innerHTML = signals.map(s => {
+    const dt = new Date(s.market_window_start);
+    const time = dt.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
+    const dur = s.market_duration === '15m' ? '15M' : '1H';
+    const dec = s.final_decision || 'SKIP';
+    const decCls = dec === 'BET HIGHER' ? 'bet-up' : dec === 'BET LOWER' ? 'bet-down' : 'skip';
+
+    let result = '—';
+    if (dec !== 'SKIP' && s.resolved_outcome) {
+      const won = (dec === 'BET HIGHER' && s.resolved_outcome === 'UP') || (dec === 'BET LOWER' && s.resolved_outcome === 'DOWN');
+      result = won
+        ? `<span class="signal-outcome won">W +$${Math.abs(s.simulated_pnl || 0).toFixed(2)}</span>`
+        : `<span class="signal-outcome lost">L $${(s.simulated_pnl || 0).toFixed(2)}</span>`;
+    } else if (dec !== 'SKIP') {
+      result = '<span class="signal-outcome pending">⏳</span>';
+    }
+
+    return `<tr>
+      <td>${time}</td>
+      <td>${dur}</td>
+      <td><span class="signal-log-decision ${decCls}">${dec}</span></td>
+      <td>${(s.score > 0 ? '+' : '') + (s.score || 0).toFixed(2)}</td>
+      <td>${(s.edge_pct > 0 ? '+' : '') + (s.edge_pct || 0).toFixed(1)}%</td>
+      <td>${result}</td>
+      <td><button class="log-open-btn" onclick="openSignalModal(${s.id})">Open</button></td>
+    </tr>`;
+  }).join('');
+
+  // Pagination
+  const totalPages = Math.ceil(total / LOG_PAGE_SIZE);
+  const pag = document.getElementById('log-pagination');
+  if (pag) {
+    const start = logPage * LOG_PAGE_SIZE + 1;
+    const end = Math.min((logPage + 1) * LOG_PAGE_SIZE, total);
+    pag.innerHTML = `
+      <button ${logPage === 0 ? 'disabled' : ''} onclick="logPage--; loadLogPage();">&larr; Prev</button>
+      <span>${start}–${end} of ${total}</span>
+      <button ${logPage >= totalPages - 1 ? 'disabled' : ''} onclick="logPage++; loadLogPage();">Next &rarr;</button>
+    `;
+  }
+}
+
+async function openSignalModal(signalId) {
+  try {
+    const resp = await fetch(`${API_BASE}/api/signal-log?offset=0&limit=1000&duration=${currentDuration}`, { headers: authHeaders() });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const sig = data.signals.find(s => s.id === signalId);
+    if (!sig) return;
+
+    const dt = new Date(sig.market_window_start);
+    const endDt = new Date(sig.market_window_start + (sig.market_duration === '15m' ? 900000 : 3600000));
+    const timeRange = `${dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}–${endDt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`;
+    const dayStr = dt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+    const durLabel = sig.market_duration === '15m' ? '15 MINS' : '1 HOUR';
+
+    const dec = sig.final_decision || 'SKIP';
+    const decCls = dec === 'BET HIGHER' ? 'up' : dec === 'BET LOWER' ? 'down' : 'skip';
+
+    let resolutionHtml = '<div class="modal-resolution pending">⏳ Pending</div>';
+    if (dec !== 'SKIP' && sig.resolved_outcome) {
+      const won = (dec === 'BET HIGHER' && sig.resolved_outcome === 'UP') || (dec === 'BET LOWER' && sig.resolved_outcome === 'DOWN');
+      resolutionHtml = `<div class="modal-resolution ${won ? 'up' : 'down'}">
+        ${won ? '✅ Won' : '❌ Lost'} — Market resolved ${sig.resolved_outcome}
+        ${sig.simulated_pnl !== null ? `<br>P&L: ${sig.simulated_pnl > 0 ? '+' : ''}$${Math.abs(sig.simulated_pnl).toFixed(2)}` : ''}
+      </div>`;
+    } else if (dec === 'SKIP') {
+      resolutionHtml = '<div class="modal-resolution" style="color:var(--static);">No trade (SKIP)</div>';
+    }
+
+    document.getElementById('modal-content').innerHTML = `
+      <div class="modal-header">
+        <div class="modal-market">BTC ${durLabel} &bull; ${dayStr} ${timeRange}</div>
+        <button class="modal-close" onclick="closeSignalModal()">&times;</button>
+      </div>
+
+      <div class="modal-section">
+        <div class="modal-section-label">Signal</div>
+        <span class="modal-signal-badge ${decCls}">${dec}</span>
+      </div>
+
+      <div class="modal-section">
+        <div class="modal-section-label">Indicators at time of signal</div>
+        <div class="modal-grid">
+          <div class="modal-stat">
+            <div class="modal-stat-label">RSI</div>
+            <div class="modal-stat-value">${(sig.rsi || 50).toFixed(1)}</div>
+          </div>
+          <div class="modal-stat">
+            <div class="modal-stat-label">MA Trend</div>
+            <div class="modal-stat-value">${sig.ma_signal > 0 ? '▲ Up' : sig.ma_signal < 0 ? '▼ Down' : '— Flat'}</div>
+          </div>
+          <div class="modal-stat">
+            <div class="modal-stat-label">Volume</div>
+            <div class="modal-stat-value">${sig.volume_signal > 0 ? 'Spike' : sig.volume_signal < 0 ? 'Drop' : 'Normal'}</div>
+          </div>
+          <div class="modal-stat">
+            <div class="modal-stat-label">Score</div>
+            <div class="modal-stat-value">${(sig.score > 0 ? '+' : '') + (sig.score || 0).toFixed(2)}</div>
+          </div>
+          <div class="modal-stat">
+            <div class="modal-stat-label">Odds</div>
+            <div class="modal-stat-value">${((sig.odds || 0.5) * 100).toFixed(0)}%</div>
+          </div>
+          <div class="modal-stat">
+            <div class="modal-stat-label">Edge</div>
+            <div class="modal-stat-value">${(sig.edge_pct > 0 ? '+' : '') + (sig.edge_pct || 0).toFixed(1)}%</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-section">
+        <div class="modal-section-label">Resolution</div>
+        <div class="modal-grid">
+          <div class="modal-stat">
+            <div class="modal-stat-label">Price To Beat</div>
+            <div class="modal-stat-value">${sig.strike_price ? '$' + sig.strike_price.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '—'}</div>
+          </div>
+          <div class="modal-stat">
+            <div class="modal-stat-label">Price at Signal</div>
+            <div class="modal-stat-value">${sig.current_price ? '$' + sig.current_price.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '—'}</div>
+          </div>
+        </div>
+        ${resolutionHtml}
+      </div>
+    `;
+
+    document.getElementById('signal-modal').style.display = 'flex';
+  } catch (e) {
+    console.error('Modal fetch failed:', e);
+  }
+}
+
+function closeSignalModal() {
+  document.getElementById('signal-modal').style.display = 'none';
+}
+
+// Event listeners
+document.getElementById('log-back')?.addEventListener('click', hideSignalLogPage);
+document.getElementById('view-all-link')?.addEventListener('click', showSignalLogPage);
+document.getElementById('signal-modal')?.addEventListener('click', (e) => {
+  if (e.target.id === 'signal-modal') closeSignalModal();
+});
 </script>
 
 </body>

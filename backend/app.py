@@ -376,5 +376,39 @@ def stats():
         })
 
 
+@app.route("/api/performance")
+@require_secret
+def performance():
+    """Rolling performance summary over last 200 signals."""
+    try:
+        import db
+        duration = request.args.get("duration")
+        client = db.get_client()
+        result = db.get_performance_summary(client, duration=duration)
+        return jsonify(result)
+    except Exception as e:
+        log.warning(f"Performance query failed: {e}")
+        return jsonify({
+            "total_signals": 0, "window": 200, "profitable": 0, "resolved": 0, "roi_pct": 0.0,
+        })
+
+
+@app.route("/api/signal-log")
+@require_secret
+def signal_log():
+    """Paginated signal log with resolution data."""
+    try:
+        import db
+        offset = int(request.args.get("offset", 0))
+        limit = int(request.args.get("limit", 25))
+        duration = request.args.get("duration")
+        client = db.get_client()
+        result = db.get_paginated_signals(client, offset=offset, limit=limit, duration=duration)
+        return jsonify(result)
+    except Exception as e:
+        log.warning(f"Signal log query failed: {e}")
+        return jsonify({"signals": [], "total": 0})
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5001, debug=True)
