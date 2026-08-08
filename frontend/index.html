@@ -1466,7 +1466,7 @@ function drawChart(candles, strike, spot, nowMs) {
   const firstTime = new Date(candles[0].time);
   const lastTime = new Date(candles[candles.length - 1].time);
   const midTime = new Date(candles[Math.floor(candles.length / 2)].time);
-  const fmt = (d) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: false });
+  const fmt = (d) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: false, timeZone: 'America/New_York' });
   ctx.fillText(fmt(firstTime), toX(0), H - 4);
   ctx.fillText(fmt(midTime), toX(Math.floor(candles.length / 2)), H - 4);
   ctx.fillText(fmt(lastTime), toX(candles.length - 1), H - 4);
@@ -1639,7 +1639,7 @@ function renderDashboard(signal, stats, performance) {
         ${recentSignals.length > 0
           ? recentSignals.map(s => {
               const dt = new Date(s.market_window_start);
-              const hour = dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+              const hour = dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/New_York' });
               const day = dt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
               const dec = s.final_decision || 'SKIP';
               const cls = dec === 'BET HIGHER' ? 'bet-up' : dec === 'BET LOWER' ? 'bet-down' : 'skip';
@@ -1799,7 +1799,7 @@ function renderLogTable(signals, total) {
 
   tbody.innerHTML = signals.map(s => {
     const dt = new Date(s.market_window_start);
-    const time = dt.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
+    const time = dt.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/New_York' });
     const dur = s.market_duration === '15m' ? '15M' : '1H';
     const dec = s.final_decision || 'SKIP';
     const decCls = dec === 'BET HIGHER' ? 'bet-up' : dec === 'BET LOWER' ? 'bet-down' : 'skip';
@@ -1849,7 +1849,7 @@ async function openSignalModal(signalId) {
 
     const dt = new Date(sig.market_window_start);
     const endDt = new Date(sig.market_window_start + (sig.market_duration === '15m' ? 900000 : 3600000));
-    const timeRange = `${dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}–${endDt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`;
+    const timeRange = `${dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/New_York' })}–${endDt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/New_York' })}`;
     const dayStr = dt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
     const durLabel = sig.market_duration === '15m' ? '15 MINS' : '1 HOUR';
 
