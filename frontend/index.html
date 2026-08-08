@@ -46,6 +46,8 @@
     padding: 16px 0;
     border-bottom: 1px solid rgba(255,255,255,0.06);
     font-size: 14px;
+    position: relative;
+    z-index: 500;
   }
 
   .status-wordmark {
@@ -274,17 +276,14 @@
     display: block;
   }
 
-  .chart-countdown {
-    position: absolute;
-    top: 6px;
-    right: 8px;
+  .price-panel-countdown {
     display: flex;
     align-items: center;
     gap: 4px;
-    z-index: 10;
-    background: rgba(11,13,16,0.7);
-    padding: 3px 8px;
-    border-radius: 3px;
+    margin-left: auto;
+    padding: 4px 10px;
+    background: rgba(255,255,255,0.04);
+    border-radius: 4px;
   }
 
   .countdown-value {
@@ -676,11 +675,11 @@
   .loading-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(11,13,16,0.7);
+    background: var(--void);
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 500;
+    z-index: 400;
     color: var(--static);
     font-family: var(--font-mono);
     font-size: 13px;
@@ -702,9 +701,54 @@
   /* --- Error --- */
   .error-state {
     text-align: center;
-    padding: 120px 0;
-    color: var(--signal-down);
-    font-size: 14px;
+    padding: 60px 0 40px;
+  }
+
+  .error-icon {
+    font-size: 32px;
+    margin-bottom: 16px;
+    opacity: 0.6;
+  }
+
+  .error-message {
+    font-size: 15px;
+    color: var(--chalk);
+    margin-bottom: 8px;
+  }
+
+  .error-detail {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--static);
+    margin-bottom: 20px;
+  }
+
+  .retry-btn {
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.12);
+    color: var(--chalk);
+    padding: 10px 28px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    transition: background 0.15s;
+    margin-bottom: 12px;
+  }
+
+  .retry-btn:hover:not(:disabled) {
+    background: rgba(255,255,255,0.14);
+  }
+
+  .retry-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .retry-countdown {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--static);
   }
 
   /* --- Mobile --- */
@@ -895,7 +939,7 @@
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 16px 0;
+    padding: 12px 0;
     border-bottom: 1px solid rgba(255,255,255,0.06);
     margin-bottom: 16px;
   }
@@ -1197,8 +1241,22 @@
 
 <!-- Signal Log Page (hidden by default) -->
 <div class="container signal-log-page" id="signal-log-page">
+  <div class="status-band">
+    <div class="status-wordmark">VERGE</div>
+    <div class="status-right">
+      <div class="status-asset">BTC</div>
+      <div class="duration-toggle" id="log-duration-toggle">
+        <button class="${currentDuration === '1h' ? 'active' : ''}" onclick="switchLogDuration('1h')">1H</button>
+        <button class="${currentDuration === '15m' ? 'active' : ''}" onclick="switchLogDuration('15m')">15M</button>
+      </div>
+      <div class="status-live">
+        <div class="heartbeat-dot"></div>
+        <span>live</span>
+      </div>
+    </div>
+  </div>
   <div class="log-header">
-    <button class="log-back" id="log-back">&larr;</button>
+    <button class="log-back" id="log-back">&larr; Dashboard</button>
     <span class="log-title">Signal Log</span>
   </div>
   <table class="log-table">
@@ -1560,7 +1618,7 @@ function drawChart(candles, strike, spot, nowMs) {
 
 function renderDashboard(signal, stats, performance) {
   if (!signal) {
-    document.getElementById('app').innerHTML = '<div class="error-state">Cannot reach Verge backend</div>';
+    renderErrorState();
     return;
   }
 
@@ -1650,18 +1708,18 @@ function renderDashboard(signal, stats, performance) {
               <span class="price-delta ${deltaDir}" id="price-delta">${deltaStr}</span>
             </div>
           </div>
+          <div class="price-panel-countdown">
+            <span class="countdown-label">MINS</span>
+            <span class="countdown-value" id="countdown-mins">${countdownMins}</span>
+            <span class="countdown-sep">:</span>
+            <span class="countdown-value" id="countdown-secs">${countdownSecs}</span>
+            <span class="countdown-label">SECS</span>
+          </div>
         </div>
         <div class="approx-note" id="approx-note" style="display:none;">Chainlink price · Binance volume (approx)</div>
         <div class="chart-row">
           <div class="chart-container">
             <canvas id="price-chart"></canvas>
-            <div class="chart-countdown" id="countdown-row">
-              <span class="countdown-label">MINS</span>
-              <span class="countdown-value" id="countdown-mins">${countdownMins}</span>
-              <span class="countdown-sep">:</span>
-              <span class="countdown-value" id="countdown-secs">${countdownSecs}</span>
-              <span class="countdown-label">SECS</span>
-            </div>
           </div>
         </div>
       </div>
@@ -1727,16 +1785,19 @@ function renderDashboard(signal, stats, performance) {
 
     ${(performance?.recent_resolved && performance.recent_resolved.length > 0)
       ? `<div class="resolved-trades">${performance.recent_resolved.map(t => {
-          const dt = new Date(t.market_window_start);
-          const time = dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/New_York' });
-          const day = dt.toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', timeZone: 'America/New_York' });
+          const windowMs = t.market_duration === '15m' ? 900000 : 3600000;
+          const openDt = new Date(t.market_window_start);
+          const closeDt = new Date(t.market_window_start + windowMs);
+          const fmtTime = (d) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/New_York' });
+          const fmtDay = (d) => d.toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', timeZone: 'America/New_York' });
+          const timeRange = `${fmtTime(openDt)}\u2013${fmtTime(closeDt)}`;
           const dec = t.decision || 'SKIP';
           const decCls = dec === 'BET HIGHER' ? 'bet-up' : dec === 'BET LOWER' ? 'bet-down' : '';
           const decDisplay = dec === 'BET HIGHER' ? 'BET UP' : dec === 'BET LOWER' ? 'BET DOWN' : dec;
           const won = t.simulated_pnl > 0;
           const outcomeIcon = t.resolved_outcome === 'UP' ? '\u25B2 UP' : '\u25BC DOWN';
           return `<div class="resolved-row">
-            <span class="resolved-time">${day} ${time}</span>
+            <span class="resolved-time">${fmtDay(openDt)} ${timeRange} ET</span>
             <span class="resolved-signal ${decCls}">${decDisplay}</span>
             <span class="resolved-outcome">${outcomeIcon}</span>
             <span class="resolved-pnl ${won ? 'won' : 'lost'}">${won ? '+' : ''}$${Math.abs(t.simulated_pnl).toFixed(2)}</span>
@@ -1800,6 +1861,87 @@ function renderDashboard(signal, stats, performance) {
 // Cached chart data — candles refresh every 5s, spot updates every 1.5s
 let cachedCandles = null;
 let cachedStrike = null;
+
+// --- Retry state ---
+let retryCountdown = 0;
+let retryTimer = null;
+let isInErrorState = false;
+
+function renderErrorState() {
+  if (!isInErrorState) {
+    isInErrorState = true;
+    stopIntervals();
+  }
+  retryCountdown = 30;
+  const app = document.getElementById('app');
+  app.innerHTML = `
+    <div class="error-state">
+      <div class="error-icon">\u26A0</div>
+      <div class="error-message">Cannot reach Verge backend</div>
+      <div class="error-detail">The server may be restarting or temporarily unavailable</div>
+      <button class="retry-btn" id="retry-btn" onclick="retryNow()">Retry now</button>
+      <div class="retry-countdown" id="retry-countdown">Retry in ${retryCountdown}s</div>
+    </div>
+  `;
+  startRetryCountdown();
+}
+
+function startRetryCountdown() {
+  if (retryTimer) clearInterval(retryTimer);
+  retryTimer = setInterval(() => {
+    retryCountdown--;
+    const el = document.getElementById('retry-countdown');
+    if (el) el.textContent = `Retry in ${retryCountdown}s`;
+    if (retryCountdown <= 0) {
+      clearInterval(retryTimer);
+      retryTimer = null;
+      attemptReconnect();
+    }
+  }, 1000);
+}
+
+function retryNow() {
+  if (retryTimer) {
+    clearInterval(retryTimer);
+    retryTimer = null;
+  }
+  retryCountdown = 0;
+  attemptReconnect();
+}
+
+async function attemptReconnect() {
+  const app = document.getElementById('app');
+  app.innerHTML = `
+    <div class="error-state">
+      <div class="error-icon">\u25CB</div>
+      <div class="error-message">Reconnecting...</div>
+    </div>
+  `;
+  try {
+    const signal = await fetchSignal();
+    if (signal) {
+      isInErrorState = false;
+      startIntervals();
+      poll();
+    } else {
+      renderErrorState();
+    }
+  } catch (e) {
+    renderErrorState();
+  }
+}
+
+function stopIntervals() {
+  if (window._pollInterval) { clearInterval(window._pollInterval); window._pollInterval = null; }
+  if (window._chartInterval) { clearInterval(window._chartInterval); window._chartInterval = null; }
+  if (window._spotInterval) { clearInterval(window._spotInterval); window._spotInterval = null; }
+}
+
+function startIntervals() {
+  if (!window._pollInterval) window._pollInterval = setInterval(poll, 30000);
+  if (!window._chartInterval) window._chartInterval = setInterval(refreshChart, 5000);
+  if (!window._spotInterval) window._spotInterval = setInterval(refreshSpot, 1500);
+}
 
 async function refreshChart() {
   const data = await fetchCandles();
@@ -1868,14 +2010,10 @@ async function poll() {
 // Initial load
 poll();
 
-// Poll every 30s
-setInterval(poll, 30000);
-
-// Refresh chart every 5s (full candle data)
-setInterval(refreshChart, 5000);
-
-// Fast spot price updates every 1.5s (just redraws with cached candles)
-setInterval(refreshSpot, 1500);
+// Start polling intervals
+window._pollInterval = setInterval(poll, 30000);
+window._chartInterval = setInterval(refreshChart, 5000);
+window._spotInterval = setInterval(refreshSpot, 1500);
 
 // --- Signal Log Page ---
 let logPage = 0;
@@ -1893,6 +2031,17 @@ function hideSignalLogPage() {
   document.getElementById('app').style.display = '';
   document.getElementById('signal-log-page').classList.remove('active');
   document.querySelector('.footer').style.display = '';
+}
+
+function switchLogDuration(dur) {
+  currentDuration = dur;
+  // Update toggle buttons on log page
+  const toggles = document.querySelectorAll('#log-duration-toggle button');
+  toggles.forEach(btn => {
+    btn.classList.toggle('active', btn.textContent.trim() === (dur === '15m' ? '15M' : '1H'));
+  });
+  logPage = 0;
+  loadLogPage();
 }
 
 async function loadLogPage() {
