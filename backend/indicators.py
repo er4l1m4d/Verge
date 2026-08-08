@@ -37,7 +37,8 @@ class SignalResult(NamedTuple):
     score: float
     decision: str      # "BET HIGHER", "BET LOWER", "SKIP"
     confidence: str    # "High", "Low", or ""
-    model_probability: float  # indicator-implied probability (0–1)
+    model_probability: float  # indicator-implied probability (0-1)
+    divergence_signal: int = 0  # shadow mode: -1, 0, +1 (not in live score yet)
 
 
 class EdgeResult(NamedTuple):
@@ -133,24 +134,95 @@ def volume_spike(
     return direction
 
 # ---------------------------------------------------------------------------
+# 2.3b — Odds-vs-Momentum Divergence (shadow mode — not in live score yet)
+# ---------------------------------------------------------------------------
+
+DIVERGENCE_EXTREME_ODDS_HIGH = 0.68
+DIVERGENCE_EXTREME_ODDS_LOW = 0.32
+DIVERGENCE_MOMENTUM_THRESHOLD = 0.003  # 0.3% price move
+
+
+def odds_momentum_divergence(odds: float, price_series: list[float]) -> int:
+    """Compare Polymarket odds against recent price momentum.
+
+    Two sub-checks:
+      1. Extreme-odds fade: odds >= 0.68 (or <= 0.32) but momentum doesn't
+         confirm -> lean opposite. Markets rarely sustain that much conviction
+         right at window open.
+      2. Momentum-not-yet-priced-in: odds near 50/50 (0.35-0.65) but
+         momentum is meaningfully directional -> lean with momentum.
+
+    Args:
+        odds: current market odds for "Up" (0-1)
+        price_series: last ~5 prices (1-minute bars, ~5 minutes lookback)
+
+    Returns:
+        +1 (lean up), -1 (lean down), or 0 (no divergence signal)
+    """
+    if len(price_series) < 2 or odds is None:
+        return 0
+
+    # Momentum: fractional change over the series
+    first = price_series[0]
+    last = price_series[-1]
+    if first <= 0:
+        return 0
+    momentum = (last - first) / first  # positive = upward
+
+    # 1. Extreme-odds fade
+    if odds >= DIVERGENCE_EXTREME_ODDS_HIGH:
+        # Odds say "Up" strongly -- but if momentum doesn't confirm, fade it
+        if momentum < DIVERGENCE_MOMENTUM_THRESHOLD:
+            return -1  # lean opposite
+    elif odds <= DIVERGENCE_EXTREME_ODDS_LOW:
+        # Odds say "Down" strongly -- but if momentum doesn't confirm, fade it
+        if momentum > -DIVERGENCE_MOMENTUM_THRESHOLD:
+            return 1  # lean opposite
+
+    # 2. Momentum-not-yet-priced-in
+    if DIVERGENCE_EXTREME_ODDS_LOW < odds < DIVERGENCE_EXTREME_ODDS_HIGH:
+        # Odds are uncertain -- if momentum is strong, follow it
+        if momentum >= DIVERGENCE_MOMENTUM_THRESHOLD:
+            return 1
+        elif momentum <= -DIVERGENCE_MOMENTUM_THRESHOLD:
+            return -1
+
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # 2.4 — Weighted scoring
 # ---------------------------------------------------------------------------
 
 
-def score_signal(rsi_val: float, ma_val: int, volume_val: int) -> SignalResult:
+def score_signal(rsi_val: float, ma_val: int, volume_val: int, divergence_val: int = 0, fear_greed_value: int | None = None) -> SignalResult:
     """Combine indicators into a weighted score and decision.
 
-    Weights: RSI 40%, Volume 35%, MA 25% (locked in PRD §6.2).
-    Thresholds: ±0.6 → High confidence, ±0.4 → Low confidence, else SKIP.
+    Weights: RSI 40%, Volume 35%, MA 25% (locked in PRD 6.2).
+    Thresholds: +/-0.6 -> High confidence, +/-0.4 -> Low confidence, else SKIP.
 
-    model_probability maps the score to a 0–1 range:
-    score=0 → 0.5, score=+1 → ~0.65, score=-1 → ~0.35.
+    model_probability maps the score to a 0-1 range:
+    score=0 -> 0.5, score=+1 -> ~0.65, score=-1 -> ~0.35.
+
+    divergence_val is logged for shadow-mode observation but does NOT
+    affect the score or decision yet (Phase 1.2).
+
+    fear_greed_value: on extreme days (<=15 or >=85), raises the bar
+    for what counts as strong enough to bet. Never affects direction.
     """
+    # Adjust thresholds on extreme Fear & Greed days
+    high_thresh = SCORE_HIGH_THRESHOLD
+    low_thresh = SCORE_LOW_THRESHOLD
+    if fear_greed_value is not None:
+        if fear_greed_value <= 15 or fear_greed_value >= 85:
+            high_thresh = 0.7
+            low_thresh = 0.5
+
     rsi_component = 0.0
     if rsi_val > RSI_OVERBOUGHT:
-        rsi_component = -1.0  # overbought → bet lower
+        rsi_component = -1.0  # overbought -> bet lower
     elif rsi_val < RSI_OVERSOLD:
-        rsi_component = 1.0   # oversold → bet higher
+        rsi_component = 1.0   # oversold -> bet higher
 
     score = (
         rsi_component * WEIGHT_RSI
@@ -161,15 +233,15 @@ def score_signal(rsi_val: float, ma_val: int, volume_val: int) -> SignalResult:
     # Map score to model probability (centered at 0.5)
     model_prob = 0.5 + score * 0.15
 
-    if score >= SCORE_HIGH_THRESHOLD:
-        return SignalResult(score, "BET HIGHER", "High", model_prob)
-    elif score >= SCORE_LOW_THRESHOLD:
-        return SignalResult(score, "BET HIGHER", "Low", model_prob)
-    elif score <= -SCORE_HIGH_THRESHOLD:
-        return SignalResult(score, "BET LOWER", "High", model_prob)
-    elif score <= -SCORE_LOW_THRESHOLD:
-        return SignalResult(score, "BET LOWER", "Low", model_prob)
-    return SignalResult(score, "SKIP", "", model_prob)
+    if score >= high_thresh:
+        return SignalResult(score, "BET HIGHER", "High", model_prob, divergence_val)
+    elif score >= low_thresh:
+        return SignalResult(score, "BET HIGHER", "Low", model_prob, divergence_val)
+    elif score <= -high_thresh:
+        return SignalResult(score, "BET LOWER", "High", model_prob, divergence_val)
+    elif score <= -low_thresh:
+        return SignalResult(score, "BET LOWER", "Low", model_prob, divergence_val)
+    return SignalResult(score, "SKIP", "", model_prob, divergence_val)
 
 # ---------------------------------------------------------------------------
 # 2.5 — Fee-adjusted edge

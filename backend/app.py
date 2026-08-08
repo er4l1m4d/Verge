@@ -175,7 +175,7 @@ def candles():
             bars_lookback = config.get("bar_lookback", 20)
 
             from engine import get_current_price_data_for_duration
-            df = get_current_price_data_for_duration(config)
+            df, _fetch_failed = get_current_price_data_for_duration(config)
 
             if df is None or len(df) == 0:
                 return jsonify({"candles": [], "strike": None, "spot": None, "now_ms": now_ms, "duration": "15m"})
@@ -286,6 +286,16 @@ def heartbeat():
     try:
         from market_config import supported_durations
 
+        # Phase 2: Read mode setting (scaffolding — no branching yet)
+        try:
+            import db
+            client = db.get_client()
+            mode = db.get_setting(client, "mode") or "paper"
+            log.info(f"[heartbeat] mode={mode}")
+        except Exception as e:
+            log.warning(f"Failed to read mode setting (defaulting to paper): {e}")
+            mode = "paper"
+
         results = []
         for dur in supported_durations():
             try:
@@ -348,6 +358,9 @@ def stats():
         duration = request.args.get("duration")
         client = db.get_client()
         result = db.get_stats(client, duration=duration)
+        # Add rolling-window stats (last 30 resolved trades)
+        rolling = db.get_rolling_stats(client, duration=duration)
+        result.update(rolling)
         return jsonify(result)
     except Exception as e:
         log.warning(f"Stats query failed (returning defaults): {e}")

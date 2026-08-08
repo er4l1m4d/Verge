@@ -38,6 +38,8 @@ from typing import Optional
 
 import pandas as pd
 
+from data_fetcher import fetch_with_retry
+
 log = logging.getLogger("verge.chainlink")
 
 # ---------------------------------------------------------------------------
@@ -122,8 +124,10 @@ def get_chainlink_price() -> Optional[float]:
 
         contract = _get_contract()
 
-        # Read latest round data
-        round_data = contract.functions.latestRoundData().call()
+        # Read latest round data (with retry for transient RPC failures)
+        round_data = fetch_with_retry(
+            lambda: contract.functions.latestRoundData().call()
+        )
         # round_data = (roundId, answer, startedAt, updatedAt, answeredInRound)
         raw_price = round_data[1]
         updated_at = round_data[3]

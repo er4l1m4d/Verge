@@ -16,6 +16,74 @@ COLUMNS = ["open_time", "open", "high", "low", "close", "volume", "close_time"]
 HEADERS = {"User-Agent": "Verge/1.0"}
 
 
+def fetch_with_retry(fn, retries=2, backoff=1.5):
+    """Wrap a fetch call with retry + exponential backoff.
+
+    Args:
+        fn: zero-arg callable that performs the fetch
+        retries: max retry attempts after the first failure
+        backoff: base multiplier for delay (delay = backoff ** attempt)
+
+    Returns:
+        The result of fn() on success.
+
+    Raises:
+        The last exception if all retries fail.
+    """
+    last_exc = None
+    for attempt in range(retries + 1):
+        try:
+            return fn()
+        except Exception as e:
+            last_exc = e
+            if attempt < retries:
+                delay = backoff ** attempt
+                log.warning(
+                    f"Fetch failed (attempt {attempt + 1}/{retries + 1}): {e}. "
+                    f"Retrying in {delay:.1f}s"
+                )
+                time.sleep(delay)
+    raise last_exc
+
+
+# ---------------------------------------------------------------------------
+# Fear & Greed Index (daily, free, no API key)
+# ---------------------------------------------------------------------------
+
+_fear_greed_cache = {"value": None, "date": None}
+
+
+def get_fear_greed_index() -> int | None:
+    """Fetch the daily Crypto Fear & Greed Index from alternative.me.
+
+    Returns the value (0-100) or None on failure. Cached per day
+    since the index updates only once daily.
+    """
+    import datetime as _dt
+
+    today = _dt.date.today().isoformat()
+    if _fear_greed_cache["date"] == today and _fear_greed_cache["value"] is not None:
+        return _fear_greed_cache["value"]
+
+    try:
+        resp = fetch_with_retry(
+            lambda: requests.get(
+                "https://api.alternative.me/fng/?limit=1",
+                timeout=10,
+            )
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        value = int(data["data"][0]["value"])
+        _fear_greed_cache["value"] = value
+        _fear_greed_cache["date"] = today
+        log.info(f"Fear & Greed Index: {value}")
+        return value
+    except Exception as e:
+        log.warning(f"Fear & Greed fetch failed: {e}")
+        return None
+
+
 def get_binance_klines(
     symbol: str,
     interval: str,
@@ -48,7 +116,9 @@ def get_binance_klines(
             "limit": limit,
         }
         try:
-            resp = requests.get(BINANCE_KLINES_URL, params=params, timeout=30)
+            resp = fetch_with_retry(
+                lambda: requests.get(BINANCE_KLINES_URL, params=params, timeout=30)
+            )
             resp.raise_for_status()
             data = resp.json()
         except requests.exceptions.ConnectionError as e:

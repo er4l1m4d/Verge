@@ -494,6 +494,28 @@
     font-variant-numeric: tabular-nums;
   }
 
+  .rolling-stats {
+    display: flex;
+    justify-content: center;
+    gap: 16px;
+    padding: 6px 20px;
+    background: var(--void);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--static);
+  }
+
+  .rolling-label {
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .rolling-item {
+    font-variant-numeric: tabular-nums;
+  }
+
   .perf-value.positive { color: var(--signal-up); }
   .perf-value.negative { color: var(--signal-down); }
 
@@ -1782,6 +1804,13 @@ function renderDashboard(signal, stats, performance) {
         <div class="perf-value ${(performance?.roi_pct || 0) >= 0 ? 'positive' : 'negative'}">${(performance?.roi_pct || 0) >= 0 ? '+' : ''}${(performance?.roi_pct || 0).toFixed(1)}%</div>
       </div>
     </div>
+    ${(performance?.rolling_count || 0) > 0 ? `
+    <div class="rolling-stats">
+      <span class="rolling-label">Last 30T</span>
+      <span class="rolling-item">${performance.rolling_win_rate}% win</span>
+      <span class="rolling-item ${(performance?.rolling_roi_pct || 0) >= 0 ? 'positive' : 'negative'}">${(performance?.rolling_roi_pct || 0) >= 0 ? '+' : ''}${(performance?.rolling_roi_pct || 0).toFixed(1)}% ROI</span>
+      <span class="rolling-item">${performance.rolling_count} trades</span>
+    </div>` : ''}
 
     ${(performance?.recent_resolved && performance.recent_resolved.length > 0)
       ? `<div class="resolved-trades">${performance.recent_resolved.map(t => {

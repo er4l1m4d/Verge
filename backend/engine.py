@@ -14,6 +14,7 @@ from dataclasses import dataclass
 sys.path.insert(0, os.path.dirname(__file__))
 
 from market_config import get_config, supported_durations
+from data_fetcher import fetch_with_retry
 
 log = logging.getLogger("verge.engine")
 
@@ -46,6 +47,7 @@ class LiveSignal:
     current_price: float | None = None
     note: str | None = None
     duration: str = "1h"
+    divergence_signal: int = 0  # shadow mode: -1, 0, +1 (not in live score yet)
 
 
 def get_current_market(duration: str = "1h") -> dict | None:
@@ -162,7 +164,9 @@ def _fetch_events_by_series(series_slug: str) -> list:
         "closed": "false",
     }
     try:
-        resp = requests.get(f"{GAMMA_API}/events", params=params, timeout=30)
+        resp = fetch_with_retry(
+            lambda: requests.get(f"{GAMMA_API}/events", params=params, timeout=30)
+        )
         resp.raise_for_status()
         return resp.json()
     except Exception as e:
@@ -183,7 +187,9 @@ def _fetch_events_by_slug_prefix(slug_prefix: str) -> list:
         "ascending": "false",
     }
     try:
-        resp = requests.get(f"{GAMMA_API}/events", params=params, timeout=30)
+        resp = fetch_with_retry(
+            lambda: requests.get(f"{GAMMA_API}/events", params=params, timeout=30)
+        )
         resp.raise_for_status()
         events = resp.json()
     except Exception as e:
@@ -206,10 +212,12 @@ def get_current_odds(token_id: str) -> float | None:
     Returns implied probability (0-1) or None.
     """
     try:
-        resp = requests.get(
-            f"{CLOB_API}/midpoint",
-            params={"token_id": token_id},
-            timeout=15,
+        resp = fetch_with_retry(
+            lambda: requests.get(
+                f"{CLOB_API}/midpoint",
+                params={"token_id": token_id},
+                timeout=15,
+            )
         )
         resp.raise_for_status()
         data = resp.json()
@@ -221,10 +229,12 @@ def get_current_odds(token_id: str) -> float | None:
 
     # Fallback: try prices-history
     try:
-        resp = requests.get(
-            f"{CLOB_API}/prices-history",
-            params={"market": token_id, "interval": "1m", "fidelity": 1},
-            timeout=15,
+        resp = fetch_with_retry(
+            lambda: requests.get(
+                f"{CLOB_API}/prices-history",
+                params={"market": token_id, "interval": "1m", "fidelity": 1},
+                timeout=15,
+            )
         )
         resp.raise_for_status()
         data = resp.json()
@@ -243,6 +253,11 @@ def get_current_price_data_for_duration(config: dict):
     For 1h: Binance 5m candles (existing behavior).
     For 15m: Chainlink 1m bars via chainlink_fetcher, reading cached ticks
     from price_snapshots table (Phase 7.2b).
+
+    Returns (df, fetch_failed) tuple where:
+        df: DataFrame of candles or None
+        fetch_failed: True if the failure was due to a network/fetch error
+                      (vs genuinely insufficient data)
     """
     import time as _time
 
@@ -252,6 +267,7 @@ def get_current_price_data_for_duration(config: dict):
 
         # Read cached ticks from price_snapshots table
         cached_ticks = []
+        fetch_failed = False
         try:
             import db
             client = db.get_client()
@@ -263,13 +279,16 @@ def get_current_price_data_for_duration(config: dict):
             cached_ticks = [{"timestamp_ms": t["timestamp_ms"], "price": t["price"]} for t in raw_ticks]
         except Exception as e:
             log.warning(f"Failed to read cached ticks (non-fatal): {e}")
+            fetch_failed = True
 
         df = get_chainlink_bars(
             cached_ticks=cached_ticks,
             interval_ms=60_000,  # 1-minute bars
             min_bars=config["min_candles"],
         )
-        return df if df is not None and len(df) > 0 else None
+        if df is not None and len(df) > 0:
+            return df, False
+        return None, fetch_failed
     else:
         # 1h path: Binance 5m candles (existing behavior)
         from data_fetcher import get_price_with_fallback
@@ -284,10 +303,12 @@ def get_current_price_data_for_duration(config: dict):
                 start_time=start_ms,
                 end_time=now_ms,
             )
-            return df if df is not None and len(df) > 0 else None
+            if df is not None and len(df) > 0:
+                return df, False
+            return None, False
         except Exception as e:
             log.warning(f"Price fetch failed: {e}")
-            return None
+            return None, True
 
 
 def generate_signal(duration: str = "1h") -> LiveSignal:
@@ -375,8 +396,9 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
         odds = 0.50  # final fallback
 
     # 4.3 — Price data (duration-aware)
-    df_price = get_current_price_data_for_duration(config)
+    df_price, price_fetch_failed = get_current_price_data_for_duration(config)
     if df_price is None or len(df_price) < config["min_candles"]:
+        note = "Fetch failed after retries" if price_fetch_failed else "Insufficient price data"
         return LiveSignal(
             decision="SKIP", final_decision="SKIP", confidence="none",
             score=0, model_probability=0.5, rsi=50, ma_signal=0,
@@ -385,7 +407,7 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
             suggested_price=None, minutes_remaining=minutes_remaining,
             seconds_remaining=seconds_remaining,
             hour_open_time=hour_open_time, hour_end_time=hour_end_time,
-            note="Insufficient price data",
+            note=note,
             duration=duration,
         )
 
@@ -407,8 +429,17 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
     else:
         vol_sig = 0
 
+    # Odds-vs-momentum divergence (shadow mode -- logged, not in score yet)
+    from indicators import odds_momentum_divergence
+    momentum_prices = prices[-5:] if len(prices) >= 2 else prices
+    div_val = odds_momentum_divergence(odds, momentum_prices)
+
+    # Fear & Greed (non-directional gate -- adjusts confidence thresholds only)
+    from data_fetcher import get_fear_greed_index
+    fg_value = get_fear_greed_index()
+
     # Score
-    sig = score_signal(rsi, ma_sig, vol_sig)
+    sig = score_signal(rsi, ma_sig, vol_sig, divergence_val=div_val, fear_greed_value=fg_value)
 
     # Fee-adjusted edge
     edge = fee_adjusted_edge(sig.decision, odds, sig.model_probability)
@@ -476,6 +507,7 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
         strike_price=strike_price,
         current_price=current_price,
         duration=duration,
+        divergence_signal=div_val,
     )
 
 
@@ -515,6 +547,7 @@ def persist_signal(sig: LiveSignal) -> None:
         strike_price=sig.strike_price,
         current_price=sig.current_price,
         note=sig.note,
+        divergence_signal=sig.divergence_signal,
     ))
 
     # Write paper trade (only if not SKIP)

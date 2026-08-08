@@ -24,6 +24,22 @@ def get_client() -> Client:
     return create_client(_supabase_url, _supabase_key)
 
 
+def get_setting(client: Client, key: str) -> str | None:
+    """Read a setting from the settings table. Returns None if not found."""
+    try:
+        resp = client.table("settings").select("value").eq("key", key).limit(1).execute()
+        if resp.data:
+            return resp.data[0]["value"]
+    except Exception as e:
+        log.warning(f"Failed to read setting '{key}': {e}")
+    return None
+
+
+def set_setting(client: Client, key: str, value: str) -> None:
+    """Write or update a setting in the settings table."""
+    client.table("settings").upsert({"key": key, "value": value}).execute()
+
+
 # --- Schema SQL (for reference / manual setup) ---
 
 SCHEMA_SQL = """
@@ -50,7 +66,8 @@ CREATE TABLE IF NOT EXISTS signals (
     minutes_remaining INTEGER,
     strike_price NUMERIC,
     current_price NUMERIC,
-    note TEXT
+    note TEXT,
+    divergence_signal INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS paper_trades (
@@ -97,6 +114,16 @@ CREATE INDEX IF NOT EXISTS idx_odds_snapshots_token ON odds_snapshots(token_id);
 CREATE INDEX IF NOT EXISTS idx_odds_snapshots_time ON odds_snapshots(timestamp);
 CREATE INDEX IF NOT EXISTS idx_price_snapshots_time ON price_snapshots(timestamp_ms);
 CREATE INDEX IF NOT EXISTS idx_price_snapshots_source ON price_snapshots(source);
+
+-- Phase 2: Sim/Live mode toggle
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+INSERT INTO settings (key, value) VALUES ('mode', 'paper')
+ON CONFLICT (key) DO NOTHING;
 """
 
 
@@ -124,6 +151,7 @@ class SignalRow:
     current_price: float | None = None
     note: str | None = None
     market_duration: str = "1h"
+    divergence_signal: int = 0
 
 
 @dataclass
@@ -173,6 +201,7 @@ def write_signal(client: Client, row: SignalRow) -> int:
         "strike_price": row.strike_price,
         "current_price": row.current_price,
         "note": row.note,
+        "divergence_signal": row.divergence_signal,
     }
     result = client.table("signals").insert(data).execute()
     row_id = result.data[0]["id"]
@@ -453,6 +482,44 @@ def get_stats(client: Client, duration: str | None = None) -> dict:
         "unlock_real_orders": unlock_real_orders,
         "recent_trades": recent,
         "recent_signals": recent_signals,
+    }
+
+
+def get_rolling_stats(client: Client, duration: str | None = None, window: int = 30) -> dict:
+    """Rolling-window performance over last N resolved trades.
+
+    Catches strategy degradation that cumulative stats can hide.
+
+    Returns dict with:
+        rolling_win_rate: win rate over last N resolved trades
+        rolling_pnl: cumulative P&L over window
+        rolling_roi_pct: ROI% over window
+        rolling_count: number of resolved trades in window
+    """
+    query = (
+        client.table("paper_trades")
+        .select("simulated_pnl, resolved_outcome")
+        .not_.is_("resolved_outcome", "null")
+        .order("id", desc=True)
+    )
+    if duration:
+        query = query.eq("market_duration", duration)
+    trades = query.limit(window).execute().data
+
+    count = len(trades)
+    if count == 0:
+        return {"rolling_win_rate": 0, "rolling_pnl": 0, "rolling_roi_pct": 0, "rolling_count": 0}
+
+    wins = sum(1 for t in trades if (t.get("simulated_pnl") or 0) > 0)
+    total_pnl = sum(t.get("simulated_pnl") or 0 for t in trades)
+    win_rate = wins / count * 100
+    roi_pct = total_pnl / count * 100 if count > 0 else 0
+
+    return {
+        "rolling_win_rate": round(win_rate, 1),
+        "rolling_pnl": round(total_pnl, 2),
+        "rolling_roi_pct": round(roi_pct, 1),
+        "rolling_count": count,
     }
 
 
