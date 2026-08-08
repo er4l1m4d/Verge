@@ -2114,7 +2114,7 @@ async function openSignalModal(signalId) {
     const dt = new Date(sig.market_window_start);
     const endDt = new Date(sig.market_window_start + (sig.market_duration === '15m' ? 900000 : 3600000));
     const timeRange = `${dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/New_York' })}–${endDt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/New_York' })}`;
-    const dayStr = dt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+    const dayStr = dt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'America/New_York' });
     const durLabel = sig.market_duration === '15m' ? '15 MINS' : '1 HOUR';
 
     const dec = sig.final_decision || 'SKIP';
