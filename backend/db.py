@@ -153,6 +153,7 @@ class SignalRow:
     market_duration: str = "1h"
     divergence_signal: int = 0
     fear_greed_value: int | None = None
+    mode: str = "safe"
 
 
 @dataclass
@@ -167,6 +168,7 @@ class PaperTradeRow:
     edge_pct: float
     suggested_price: float | None
     market_duration: str = "1h"
+    mode: str = "safe"
 
 
 @dataclass
@@ -204,6 +206,7 @@ def write_signal(client: Client, row: SignalRow) -> int:
         "note": row.note,
         "divergence_signal": row.divergence_signal,
         "fear_greed_value": row.fear_greed_value,
+        "mode": row.mode,
     }
     result = client.table("signals").insert(data).execute()
     row_id = result.data[0]["id"]
@@ -223,6 +226,7 @@ def write_paper_trade(client: Client, row: PaperTradeRow) -> int:
         "score": row.score,
         "edge_pct": row.edge_pct,
         "suggested_price": row.suggested_price,
+        "mode": row.mode,
     }
     result = client.table("paper_trades").insert(data).execute()
     row_id = result.data[0]["id"]
@@ -257,13 +261,14 @@ def write_price_snapshot(client: Client, row: PriceSnapshotRow) -> int:
 
 # --- Query functions ---
 
-def get_existing_signal(client: Client, window_start: int, duration: str = "1h") -> dict | None:
-    """Check if a signal already exists for this market window + duration (idempotency)."""
+def get_existing_signal(client: Client, window_start: int, duration: str = "1h", mode: str = "safe") -> dict | None:
+    """Check if a signal already exists for this market window + duration + mode (idempotency)."""
     result = (
         client.table("signals")
         .select("id")
         .eq("market_window_start", window_start)
         .eq("market_duration", duration)
+        .eq("mode", mode)
         .limit(1)
         .execute()
     )
@@ -446,18 +451,22 @@ def get_paginated_signals(
     return {"signals": signals, "total": total}
 
 
-def get_stats(client: Client, duration: str | None = None) -> dict:
+def get_stats(client: Client, duration: str | None = None, mode: str | None = None) -> dict:
     """Aggregate stats over paper_trades, including recent trades for history band.
 
     Args:
         duration: if provided, filter to this duration only.
                   If None, returns combined stats across all durations.
+        mode: if provided, filter to this mode only ("safe" or "risk").
+              Graduation gate always uses safe mode internally.
     """
     query = client.table("paper_trades").select(
-        "decision, resolved_outcome, simulated_pnl, market_window_start, market_duration"
+        "decision, resolved_outcome, simulated_pnl, market_window_start, market_duration, mode"
     ).order("id", desc=True)
     if duration:
         query = query.eq("market_duration", duration)
+    if mode:
+        query = query.eq("mode", mode)
     trades = query.execute().data
 
     total = len(trades)
@@ -473,8 +482,21 @@ def get_stats(client: Client, duration: str | None = None) -> dict:
     # Recent signals for signal log (all decisions, last 10)
     recent_signals = get_recent_signals(client, limit=10, duration=duration)
 
-    # 6.4 — Graduation gate: ≥200 trades AND positive cumulative ROI (per duration)
-    unlock_real_orders = total >= 200 and cumulative_pnl > 0
+    # 6.4 — Graduation gate: ALWAYS scoped to safe mode only
+    # Risk mode trades must never count toward graduation
+    safe_trades = [t for t in trades if t.get("mode", "safe") == "safe"] if mode != "risk" else []
+    if mode is None:
+        # No mode filter — query safe-mode trades specifically for gate
+        safe_query = client.table("paper_trades").select(
+            "resolved_outcome, simulated_pnl, mode"
+        ).eq("mode", "safe")
+        if duration:
+            safe_query = safe_query.eq("market_duration", duration)
+        safe_trades = safe_query.execute().data
+    safe_resolved = [t for t in safe_trades if t.get("resolved_outcome")]
+    safe_total = len(safe_trades)
+    safe_cumulative_pnl = sum(t.get("simulated_pnl", 0) for t in safe_resolved)
+    unlock_real_orders = safe_total >= 200 and safe_cumulative_pnl > 0
 
     return {
         "total_trades": total,
@@ -524,6 +546,67 @@ def get_rolling_stats(client: Client, duration: str | None = None, window: int =
         "rolling_pnl": round(total_pnl, 2),
         "rolling_roi_pct": round(roi_pct, 1),
         "rolling_count": count,
+    }
+
+
+def get_comparison_stats(client: Client, duration: str | None = None) -> dict:
+    """Compare safe-mode vs risk-mode performance, controlling for calendar time.
+
+    Returns:
+        safe: safe-mode win rate, ROI, trade count
+        risk_all: risk-mode stats across all time
+        risk_controlled: risk-mode stats restricted to safe-mode's time window
+    """
+    def _calc_stats(trades):
+        resolved = [t for t in trades if t.get("resolved_outcome")]
+        wins = [t for t in resolved if (t.get("simulated_pnl") or 0) > 0]
+        total_pnl = sum(t.get("simulated_pnl") or 0 for t in resolved)
+        win_rate = len(wins) / len(resolved) * 100 if resolved else 0
+        roi_pct = total_pnl / len(resolved) * 100 if resolved else 0
+        return {
+            "total": len(trades),
+            "resolved": len(resolved),
+            "win_rate": round(win_rate, 1),
+            "cumulative_pnl": round(total_pnl, 2),
+            "roi_pct": round(roi_pct, 1),
+        }
+
+    # Query safe-mode trades
+    safe_q = (
+        client.table("paper_trades")
+        .select("resolved_outcome, simulated_pnl, market_window_start, mode")
+        .eq("mode", "safe")
+        .order("market_window_start", desc=False)
+    )
+    if duration:
+        safe_q = safe_q.eq("market_duration", duration)
+    safe_trades = safe_q.execute().data
+
+    # Query all risk-mode trades
+    risk_q = (
+        client.table("paper_trades")
+        .select("resolved_outcome, simulated_pnl, market_window_start, mode")
+        .eq("mode", "risk")
+        .order("market_window_start", desc=False)
+    )
+    if duration:
+        risk_q = risk_q.eq("market_duration", duration)
+    risk_all_trades = risk_q.execute().data
+
+    # Risk-mode trades restricted to safe-mode's time window
+    risk_controlled_trades = []
+    if safe_trades and risk_all_trades:
+        safe_first = safe_trades[0].get("market_window_start", 0)
+        safe_last = safe_trades[-1].get("market_window_start", 0)
+        risk_controlled_trades = [
+            t for t in risk_all_trades
+            if safe_first <= (t.get("market_window_start") or 0) <= safe_last
+        ]
+
+    return {
+        "safe": _calc_stats(safe_trades),
+        "risk_all": _calc_stats(risk_all_trades),
+        "risk_controlled": _calc_stats(risk_controlled_trades),
     }
 
 

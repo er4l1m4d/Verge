@@ -107,10 +107,12 @@ def signal():
 
     Returns the full live signal as JSON.
     Accepts ?duration=1h (default) or ?duration=15m.
+    Accepts ?mode=safe (default) or ?mode=risk.
     """
     try:
         duration = request.args.get("duration", "1h")
-        sig = generate_signal(duration=duration)
+        mode = request.args.get("mode", "safe")
+        sig = generate_signal(duration=duration, mode=mode)
         return jsonify({
             "decision": sig.decision,
             "final_decision": sig.final_decision,
@@ -140,6 +142,7 @@ def signal():
             "note": sig.note,
             "divergence_signal": sig.divergence_signal,
             "fear_greed_value": sig.fear_greed_value,
+            "mode": sig.mode,
         })
     except Exception as e:
         log.exception("Signal generation failed")
@@ -284,30 +287,32 @@ def heartbeat():
 
     Generates signal for each duration (1h + 15m), persists to Supabase,
     resolves previous windows. Idempotent: won't duplicate signals.
+
+    Dual-track: scores once per window, branches into safe-mode (filtered)
+    and risk-mode (forced bet) signals. Telegram alerts only for safe mode.
     """
     try:
         from market_config import supported_durations
-
-        # Phase 2: Read mode setting (scaffolding — no branching yet)
-        try:
-            import db
-            client = db.get_client()
-            mode = db.get_setting(client, "mode") or "paper"
-            log.info(f"[heartbeat] mode={mode}")
-        except Exception as e:
-            log.warning(f"Failed to read mode setting (defaulting to paper): {e}")
-            mode = "paper"
+        from engine import generate_risk_signal
 
         results = []
         for dur in supported_durations():
             try:
-                sig = generate_signal(duration=dur)
+                # Score once — same indicators, same API calls
+                sig = generate_signal(duration=dur, mode="safe")
 
-                # Persist to database
+                # Persist safe-mode signal
                 try:
                     persist_signal(sig)
                 except Exception as e:
-                    log.warning(f"Persist failed for {dur} (non-fatal): {e}")
+                    log.warning(f"Safe persist failed for {dur} (non-fatal): {e}")
+
+                # Risk mode: reuse same score, force direction
+                risk_sig = generate_risk_signal(sig)
+                try:
+                    persist_signal(risk_sig)
+                except Exception as e:
+                    log.warning(f"Risk persist failed for {dur} (non-fatal): {e}")
 
                 # Record Chainlink price tick for 15m bar-building (Phase 7.2a)
                 if dur == "15m":
@@ -316,7 +321,7 @@ def heartbeat():
                     except Exception as e:
                         log.warning(f"Price tick recording failed for {dur} (non-fatal): {e}")
 
-                # Telegram alert (only on BET decisions)
+                # Telegram alert — safe mode only (risk mode is silent)
                 try:
                     alert_on_signal(sig)
                 except Exception as e:
@@ -331,6 +336,7 @@ def heartbeat():
                 results.append({
                     "duration": dur,
                     "decision": sig.final_decision,
+                    "risk_decision": risk_sig.final_decision,
                     "market": sig.market_slug,
                     "minutes_remaining": sig.minutes_remaining,
                 })
@@ -353,13 +359,16 @@ def heartbeat():
 def stats():
     """5.4 — Stats endpoint.
 
-    Aggregate stats over paper_trades. Optional ?duration=1h|15m filter.
+    Aggregate stats over paper_trades.
+    Optional ?duration=1h|15m filter.
+    Optional ?mode=safe|risk filter.
     """
     try:
         import db
         duration = request.args.get("duration")
+        mode = request.args.get("mode")
         client = db.get_client()
-        result = db.get_stats(client, duration=duration)
+        result = db.get_stats(client, duration=duration, mode=mode)
         # Add rolling-window stats (last 30 resolved trades)
         rolling = db.get_rolling_stats(client, duration=duration)
         result.update(rolling)
@@ -377,6 +386,55 @@ def stats():
             "recent_trades": [],
             "recent_signals": [],
         })
+
+
+@app.route("/api/comparison")
+@require_secret
+def comparison():
+    """5.2 — Compare safe-mode vs risk-mode performance.
+
+    Returns side-by-side stats plus calendar-time controlled comparison.
+    Optional ?duration=1h|15m filter.
+    """
+    try:
+        import db
+        duration = request.args.get("duration")
+        client = db.get_client()
+        result = db.get_comparison_stats(client, duration=duration)
+        return jsonify(result)
+    except Exception as e:
+        log.exception("Comparison stats failed")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/weekly-digest")
+@require_secret
+def weekly_digest():
+    """5.3 — Weekly digest comparing safe vs risk mode.
+
+    Sends a Telegram message with both tracks' current standing.
+    Should be triggered weekly via cron or manual call.
+    """
+    try:
+        import db
+        from telegram import send_weekly_digest
+
+        client = db.get_client()
+        safe_stats = db.get_stats(client, mode="safe")
+        risk_stats = db.get_stats(client, mode="risk")
+        comparison = db.get_comparison_stats(client)
+
+        sent = send_weekly_digest(safe_stats, risk_stats, comparison)
+        return jsonify({
+            "status": "ok",
+            "sent": sent,
+            "safe": safe_stats,
+            "risk": risk_stats,
+            "comparison": comparison,
+        })
+    except Exception as e:
+        log.exception("Weekly digest failed")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/performance")

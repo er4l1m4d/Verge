@@ -101,6 +101,7 @@ class LiveSignal:
     duration: str = "1h"
     divergence_signal: int = 0  # shadow mode: -1, 0, +1 (not in live score yet)
     fear_greed_value: int | None = None  # daily Fear & Greed index (0-100)
+    mode: str = "safe"  # "safe" (filtered) or "risk" (forced bet)
 
 
 def get_current_market(duration: str = "1h") -> dict | None:
@@ -388,16 +389,20 @@ def get_current_price_data_for_duration(config: dict):
             return None, True
 
 
-def generate_signal(duration: str = "1h") -> LiveSignal:
+def generate_signal(duration: str = "1h", mode: str = "safe") -> LiveSignal:
     """Generate the current live signal for a given duration.
 
     Chains: market discovery → odds → prices → indicators → scoring.
 
     Args:
         duration: "1h" or "15m" (keys from market_config.MARKET_CONFIG)
+        mode: "safe" (filtered) or "risk" (forced bet). Mode only affects
+              post-scoring decision logic — indicators and scoring are identical.
     """
     try:
-        return _generate_signal_inner(duration)
+        sig = _generate_signal_inner(duration)
+        sig.mode = mode
+        return sig
     except Exception as e:
         log.exception("Signal generation failed")
         return LiveSignal(
@@ -409,6 +414,7 @@ def generate_signal(duration: str = "1h") -> LiveSignal:
             hour_open_time=None, hour_end_time=None,
             note=f"Error: {e}",
             duration=duration,
+            mode=mode,
         )
 
 
@@ -620,6 +626,53 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
     )
 
 
+def generate_risk_signal(safe_sig: LiveSignal) -> LiveSignal:
+    """Produce risk-mode variant from an already-computed safe-mode signal.
+
+    Risk mode forces a BET on every window, in the direction the score leans.
+    - Score > 0 → BET HIGHER
+    - Score < 0 → BET LOWER
+    - Score = 0 → BET HIGHER (explicit tiebreak)
+    - Confidence is always "forced" (never confused with real conviction)
+    - Fee-adjusted edge is computed for logging but never gates the decision
+    - Same position sizing as safe mode (identical suggested_price_discount)
+    """
+    from indicators import fee_adjusted_edge
+    from market_config import get_config
+
+    # Force direction from score's sign, regardless of magnitude
+    if safe_sig.score > 0:
+        risk_decision = "BET HIGHER"
+    elif safe_sig.score < 0:
+        risk_decision = "BET LOWER"
+    else:
+        risk_decision = "BET HIGHER"  # explicit tiebreak: zero → HIGHER
+
+    # Fee-adjusted edge for logging (inform, not gate)
+    edge = fee_adjusted_edge(risk_decision, safe_sig.odds, safe_sig.model_probability)
+
+    # Same position sizing as safe mode
+    config = get_config(safe_sig.duration)
+    discount = config.get("suggested_price_discount", 0.95)
+    suggested_price = None
+    if risk_decision == "BET HIGHER":
+        suggested_price = round(safe_sig.odds * discount, 2)
+    elif risk_decision == "BET LOWER":
+        suggested_price = round((1 - safe_sig.odds) * discount, 2)
+
+    # Return a new LiveSignal with risk-mode overrides
+    from dataclasses import replace
+    return replace(safe_sig,
+        decision=risk_decision,
+        final_decision=risk_decision,  # always BET (never SKIP in risk mode)
+        confidence="forced",
+        edge_pct=edge.edge_pct,
+        fee_eroded=edge.fee_eroded,
+        suggested_price=suggested_price,
+        mode="risk",
+    )
+
+
 # --- Phase 5: Persistence ---
 
 def persist_signal(sig: LiveSignal) -> None:
@@ -629,10 +682,10 @@ def persist_signal(sig: LiveSignal) -> None:
     client = db.get_client()
     window = sig.hour_open_time or int(time.time() * 1000) - 3_600_000
 
-    # Check idempotency: don't duplicate signals for same window + duration
-    existing = db.get_existing_signal(client, window, duration=sig.duration)
+    # Check idempotency: don't duplicate signals for same window + duration + mode
+    existing = db.get_existing_signal(client, window, duration=sig.duration, mode=sig.mode)
     if existing:
-        log.info(f"Signal already exists for window {window} duration={sig.duration}, skipping write")
+        log.info(f"Signal already exists for window {window} duration={sig.duration} mode={sig.mode}, skipping write")
         return
 
     # Write signal (always)
@@ -658,6 +711,7 @@ def persist_signal(sig: LiveSignal) -> None:
         note=sig.note,
         divergence_signal=sig.divergence_signal,
         fear_greed_value=sig.fear_greed_value,
+        mode=sig.mode,
     ))
 
     # Write paper trade (only if not SKIP)
@@ -672,6 +726,7 @@ def persist_signal(sig: LiveSignal) -> None:
             score=sig.score,
             edge_pct=sig.edge_pct,
             suggested_price=sig.suggested_price,
+            mode=sig.mode,
         ))
 
     # Write odds snapshot (every heartbeat tick)
