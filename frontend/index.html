@@ -1912,7 +1912,7 @@ function renderDashboard(signal, stats, performance) {
           const openDt = new Date(t.market_window_start);
           const closeDt = new Date(t.market_window_start + windowMs);
           const fmtTime = (d) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/New_York' });
-          const fmtDay = (d) => d.toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', timeZone: 'America/New_York' });
+          const fmtDay = (d) => d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'America/New_York' });
           const timeRange = `${fmtTime(openDt)}\u2013${fmtTime(closeDt)}`;
           const dec = t.decision || 'SKIP';
           const decCls = dec === 'BET HIGHER' ? 'bet-up' : dec === 'BET LOWER' ? 'bet-down' : '';
