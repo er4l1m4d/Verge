@@ -165,7 +165,9 @@ class TestFlaskAPI:
 
     @patch("data_fetcher.get_binance_klines", side_effect=_mock_binance_klines)
     @patch("engine.requests.get", side_effect=_mock_clob_responses())
-    def test_heartbeat_endpoint(self, mock_get, mock_klines):
+    @patch("db.get_frozen_durations", return_value=set())
+    @patch("db.get_client")
+    def test_heartbeat_endpoint(self, mock_db_client, mock_frozen, mock_get, mock_klines):
         client = app.test_client()
         resp = client.get("/api/heartbeat")
         assert resp.status_code == 200
@@ -181,7 +183,9 @@ class TestFlaskAPI:
     @patch("engine.requests.get", side_effect=_mock_clob_responses())
     @patch("app.persist_signal")
     @patch("app.resolve_previous_hour")
-    def test_heartbeat_calls_persist(self, mock_resolve, mock_persist, mock_get, mock_klines):
+    @patch("db.get_frozen_durations", return_value=set())
+    @patch("db.get_client")
+    def test_heartbeat_calls_persist(self, mock_db_client, mock_frozen, mock_resolve, mock_persist, mock_get, mock_klines):
         client = app.test_client()
         resp = client.get("/api/heartbeat")
         assert resp.status_code == 200

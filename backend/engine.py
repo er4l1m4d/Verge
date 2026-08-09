@@ -101,7 +101,6 @@ class LiveSignal:
     duration: str = "1h"
     divergence_signal: int = 0  # shadow mode: -1, 0, +1 (not in live score yet)
     fear_greed_value: int | None = None  # daily Fear & Greed index (0-100)
-    mode: str = "safe"  # "safe" (filtered) or "risk" (forced bet)
 
 
 def get_current_market(duration: str = "1h") -> dict | None:
@@ -389,20 +388,16 @@ def get_current_price_data_for_duration(config: dict):
             return None, True
 
 
-def generate_signal(duration: str = "1h", mode: str = "safe") -> LiveSignal:
+def generate_signal(duration: str = "1h") -> LiveSignal:
     """Generate the current live signal for a given duration.
 
     Chains: market discovery → odds → prices → indicators → scoring.
 
     Args:
         duration: "1h" or "15m" (keys from market_config.MARKET_CONFIG)
-        mode: "safe" (filtered) or "risk" (forced bet). Mode only affects
-              post-scoring decision logic — indicators and scoring are identical.
     """
     try:
-        sig = _generate_signal_inner(duration)
-        sig.mode = mode
-        return sig
+        return _generate_signal_inner(duration)
     except Exception as e:
         log.exception("Signal generation failed")
         return LiveSignal(
@@ -414,7 +409,6 @@ def generate_signal(duration: str = "1h", mode: str = "safe") -> LiveSignal:
             hour_open_time=None, hour_end_time=None,
             note=f"Error: {e}",
             duration=duration,
-            mode=mode,
         )
 
 
@@ -619,52 +613,6 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
         fear_greed_value=fg_value,
     )
 
-
-def generate_risk_signal(safe_sig: LiveSignal) -> LiveSignal:
-    """Produce risk-mode variant from an already-computed safe-mode signal.
-
-    Risk mode forces a BET on every window, in the direction the score leans.
-    - Score > 0 → BET HIGHER
-    - Score < 0 → BET LOWER
-    - Score = 0 → BET HIGHER (explicit tiebreak)
-    - Confidence is always "forced" (never confused with real conviction)
-    - Fee-adjusted edge is computed for logging but never gates the decision
-    - Same position sizing as safe mode (identical suggested_price_discount)
-    """
-    from indicators import fee_adjusted_edge
-    from market_config import get_config
-
-    # Force direction from score's sign, regardless of magnitude
-    if safe_sig.score > 0:
-        risk_decision = "BET HIGHER"
-    elif safe_sig.score < 0:
-        risk_decision = "BET LOWER"
-    else:
-        risk_decision = "BET HIGHER"  # explicit tiebreak: zero → HIGHER
-
-    # Fee-adjusted edge for logging (inform, not gate)
-    edge = fee_adjusted_edge(risk_decision, safe_sig.odds, safe_sig.model_probability)
-
-    # Same position sizing as safe mode
-    config = get_config(safe_sig.duration)
-    discount = config.get("suggested_price_discount", 0.95)
-    suggested_price = None
-    if risk_decision == "BET HIGHER":
-        suggested_price = round(safe_sig.odds * discount, 2)
-    elif risk_decision == "BET LOWER":
-        suggested_price = round((1 - safe_sig.odds) * discount, 2)
-
-    # Return a new LiveSignal with risk-mode overrides
-    from dataclasses import replace
-    return replace(safe_sig,
-        decision=risk_decision,
-        final_decision=risk_decision,  # always BET (never SKIP in risk mode)
-        confidence="forced",
-        edge_pct=edge.edge_pct,
-        fee_eroded=edge.fee_eroded,
-        suggested_price=suggested_price,
-        mode="risk",
-    )
 
 
 # --- Phase 5: Persistence ---

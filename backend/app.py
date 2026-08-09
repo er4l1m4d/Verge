@@ -103,16 +103,14 @@ def debug():
 @app.route("/api/signal")
 @require_secret
 def signal():
-    """4.4 — Signal endpoint.
+    """Signal endpoint.
 
     Returns the full live signal as JSON.
     Accepts ?duration=1h (default) or ?duration=15m.
-    Accepts ?mode=safe (default) or ?mode=risk.
     """
     try:
         duration = request.args.get("duration", "1h")
-        mode = request.args.get("mode", "safe")
-        sig = generate_signal(duration=duration, mode=mode)
+        sig = generate_signal(duration=duration)
         return jsonify({
             "decision": sig.decision,
             "final_decision": sig.final_decision,
@@ -142,7 +140,6 @@ def signal():
             "note": sig.note,
             "divergence_signal": sig.divergence_signal,
             "fear_greed_value": sig.fear_greed_value,
-            "mode": sig.mode,
         })
     except Exception as e:
         log.exception("Signal generation failed")
@@ -288,40 +285,45 @@ def heartbeat():
     Generates signal for each duration (1h + 15m), persists to Supabase,
     resolves previous windows. Idempotent: won't duplicate signals.
 
-    Dual-track: scores once per window, branches into safe-mode (filtered)
-    and risk-mode (forced bet) signals. Telegram alerts only for safe mode.
+    Frozen durations skip signal generation but still resolve open trades.
     """
     try:
+        import db
         from market_config import supported_durations
-        from engine import generate_risk_signal
+
+        client = db.get_client()
+        frozen = db.get_frozen_durations(client)
 
         results = []
         for dur in supported_durations():
             try:
-                # Score once — same indicators, same API calls
-                sig = generate_signal(duration=dur, mode="safe")
+                # Frozen durations: skip generation, still resolve
+                if dur in frozen:
+                    log.info(f"[{dur}] Frozen — skipping signal generation")
+                    try:
+                        resolve_previous_hour(duration=dur)
+                    except Exception as e:
+                        log.warning(f"Resolution check failed for {dur} (non-fatal): {e}")
+                    results.append({"duration": dur, "status": "frozen"})
+                    continue
 
-                # Persist safe-mode signal
+                # Generate signal
+                sig = generate_signal(duration=dur)
+
+                # Persist signal
                 try:
                     persist_signal(sig)
                 except Exception as e:
-                    log.warning(f"Safe persist failed for {dur} (non-fatal): {e}")
+                    log.warning(f"Persist failed for {dur} (non-fatal): {e}")
 
-                # Risk mode: reuse same score, force direction
-                risk_sig = generate_risk_signal(sig)
-                try:
-                    persist_signal(risk_sig)
-                except Exception as e:
-                    log.warning(f"Risk persist failed for {dur} (non-fatal): {e}")
-
-                # Record Chainlink price tick for 15m bar-building (Phase 7.2a)
+                # Record Chainlink price tick for 15m bar-building
                 if dur == "15m":
                     try:
                         record_price_tick(duration=dur)
                     except Exception as e:
                         log.warning(f"Price tick recording failed for {dur} (non-fatal): {e}")
 
-                # Telegram alert — safe mode only (risk mode is silent)
+                # Telegram alert
                 try:
                     alert_on_signal(sig)
                 except Exception as e:
@@ -336,7 +338,6 @@ def heartbeat():
                 results.append({
                     "duration": dur,
                     "decision": sig.final_decision,
-                    "risk_decision": risk_sig.final_decision,
                     "market": sig.market_slug,
                     "minutes_remaining": sig.minutes_remaining,
                 })
@@ -357,20 +358,18 @@ def heartbeat():
 @app.route("/api/stats")
 @require_secret
 def stats():
-    """5.4 — Stats endpoint.
+    """Stats endpoint.
 
     Aggregate stats over paper_trades.
     Optional ?duration=1h|15m filter.
-    Optional ?mode=safe|risk filter.
     """
     try:
         import db
         duration = request.args.get("duration")
-        mode = request.args.get("mode")
         client = db.get_client()
-        result = db.get_stats(client, duration=duration, mode=mode)
+        result = db.get_stats(client, duration=duration)
         # Add rolling-window stats (last 30 resolved trades)
-        rolling = db.get_rolling_stats(client, duration=duration, mode=mode)
+        rolling = db.get_rolling_stats(client, duration=duration)
         result.update(rolling)
         return jsonify(result)
     except Exception as e:
@@ -388,31 +387,12 @@ def stats():
         })
 
 
-@app.route("/api/comparison")
-@require_secret
-def comparison():
-    """5.2 — Compare safe-mode vs risk-mode performance.
-
-    Returns side-by-side stats plus calendar-time controlled comparison.
-    Optional ?duration=1h|15m filter.
-    """
-    try:
-        import db
-        duration = request.args.get("duration")
-        client = db.get_client()
-        result = db.get_comparison_stats(client, duration=duration)
-        return jsonify(result)
-    except Exception as e:
-        log.exception("Comparison stats failed")
-        return jsonify({"error": str(e)}), 500
-
-
 @app.route("/api/weekly-digest")
 @require_secret
 def weekly_digest():
-    """5.3 — Weekly digest comparing safe vs risk mode.
+    """Weekly digest with performance stats.
 
-    Sends a Telegram message with both tracks' current standing.
+    Sends a Telegram message with current standing.
     Should be triggered weekly via cron or manual call.
     """
     try:
@@ -420,17 +400,13 @@ def weekly_digest():
         from telegram import send_weekly_digest
 
         client = db.get_client()
-        safe_stats = db.get_stats(client, mode="safe")
-        risk_stats = db.get_stats(client, mode="risk")
-        comparison = db.get_comparison_stats(client)
+        stats = db.get_stats(client)
 
-        sent = send_weekly_digest(safe_stats, risk_stats, comparison)
+        sent = send_weekly_digest(stats)
         return jsonify({
             "status": "ok",
             "sent": sent,
-            "safe": safe_stats,
-            "risk": risk_stats,
-            "comparison": comparison,
+            "stats": stats,
         })
     except Exception as e:
         log.exception("Weekly digest failed")
@@ -444,9 +420,8 @@ def performance():
     try:
         import db
         duration = request.args.get("duration")
-        mode = request.args.get("mode")
         client = db.get_client()
-        result = db.get_performance_summary(client, duration=duration, mode=mode)
+        result = db.get_performance_summary(client, duration=duration)
         return jsonify(result)
     except Exception as e:
         log.warning(f"Performance query failed: {e}")
@@ -464,9 +439,8 @@ def signal_log():
         offset = int(request.args.get("offset", 0))
         limit = int(request.args.get("limit", 25))
         duration = request.args.get("duration")
-        mode = request.args.get("mode")
         client = db.get_client()
-        result = db.get_paginated_signals(client, offset=offset, limit=limit, duration=duration, mode=mode)
+        result = db.get_paginated_signals(client, offset=offset, limit=limit, duration=duration)
         return jsonify(result)
     except Exception as e:
         log.warning(f"Signal log query failed: {e}")
@@ -480,13 +454,42 @@ def signal_log_batches():
     try:
         import db
         duration = request.args.get("duration")
-        mode = request.args.get("mode")
         client = db.get_client()
-        result = db.get_batch_summaries(client, duration=duration, mode=mode)
+        result = db.get_batch_summaries(client, duration=duration)
         return jsonify(result)
     except Exception as e:
         log.warning(f"Batch summaries query failed: {e}")
         return jsonify({"batches": [], "total_batches": 0})
+
+
+@app.route("/api/admin/freeze", methods=["POST"])
+@require_secret
+def freeze_duration():
+    """Freeze or unfreeze a duration. Frozen durations skip signal generation."""
+    try:
+        from market_config import MARKET_CONFIGS
+        duration = request.args.get("duration")
+        frozen = request.args.get("frozen", "true").lower() == "true"
+        if duration not in MARKET_CONFIGS:
+            return jsonify({"error": "unknown duration"}), 400
+        client = db.get_client()
+        db.set_duration_frozen(client, duration, frozen)
+        return jsonify({"duration": duration, "frozen": frozen})
+    except Exception as e:
+        log.warning(f"Freeze toggle failed: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/frozen")
+@require_secret
+def get_frozen():
+    """Return currently frozen durations."""
+    try:
+        client = db.get_client()
+        frozen = db.get_frozen_durations(client)
+        return jsonify({"frozen": sorted(frozen)})
+    except Exception as e:
+        return jsonify({"frozen": []})
 
 
 if __name__ == "__main__":

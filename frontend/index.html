@@ -149,84 +149,40 @@
     background: rgba(255,255,255,0.04);
   }
 
-  .mode-toggle {
+  .freeze-lock {
+    cursor: pointer;
+    font-size: 11px;
+    padding: 0 4px;
+    opacity: 0.5;
+    transition: opacity 0.2s;
+    user-select: none;
+  }
+
+  .freeze-lock:hover {
+    opacity: 1;
+  }
+
+  .freeze-lock.frozen {
+    opacity: 1;
+    color: var(--cost-amber);
+  }
+
+  .frozen-banner {
     display: flex;
     align-items: center;
-    gap: 0;
-    border: 1px solid rgba(255,255,255,0.12);
-    border-radius: 6px;
-    overflow: hidden;
+    gap: 8px;
+    padding: 10px 16px;
+    background: rgba(214,165,68,0.1);
+    border: 1px solid rgba(214,165,68,0.25);
+    border-radius: 8px;
+    margin-bottom: 16px;
     font-family: var(--font-mono);
-    font-size: 11px;
-    letter-spacing: 1px;
-    text-transform: uppercase;
+    font-size: 12px;
+    color: var(--cost-amber);
   }
 
-  .mode-toggle button {
-    background: transparent;
-    border: none;
-    color: var(--static);
-    padding: 5px 10px;
-    cursor: pointer;
-    font-family: inherit;
-    font-size: inherit;
-    letter-spacing: inherit;
-    text-transform: inherit;
-    transition: all 0.15s ease;
-  }
-
-  .mode-toggle button.active {
-    background: rgba(255,255,255,0.08);
-    color: var(--chalk);
-  }
-
-  .mode-toggle button.mode-risk-btn.active {
-    background: rgba(230,126,34,0.2);
-    color: #e67e22;
-  }
-
-  .mode-toggle button:hover:not(.active) {
-    color: var(--chalk);
-    background: rgba(255,255,255,0.04);
-  }
-
-  .mode-badge {
-    display: inline-block;
-    padding: 2px 6px;
-    border-radius: 3px;
-    font-size: 10px;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }
-
-  .mode-badge.safe {
-    background: rgba(46,204,113,0.15);
-    color: #2ecc71;
-  }
-
-  .mode-badge.risk {
-    background: rgba(230,126,34,0.15);
-    color: #e67e22;
-  }
-
-  .mode-indicator {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    padding: 3px 8px;
-    border-radius: 4px;
-  }
-
-  .mode-indicator.safe {
-    color: rgba(46,204,113,0.7);
-    background: rgba(46,204,113,0.08);
-  }
-
-  .mode-indicator.risk {
-    color: #e67e22;
-    background: rgba(230,126,34,0.12);
+  .frozen-icon {
+    font-size: 14px;
   }
 
   .approx-note {
@@ -446,7 +402,6 @@
   .confidence-badge.high { background: rgba(51,193,126,0.15); color: var(--signal-up); }
   .confidence-badge.medium { background: rgba(214,165,68,0.15); color: var(--cost-amber); }
   .confidence-badge.low { background: rgba(107,114,128,0.15); color: var(--static); }
-  .confidence-badge.forced { background: rgba(239,68,68,0.15); color: var(--signal-down); font-weight: 600; }
 
   /* --- Evidence Band --- */
   .evidence-band {
@@ -1442,10 +1397,6 @@
         <button class="${currentDuration === '1h' ? 'active' : ''}" onclick="switchLogDuration('1h')">1H</button>
         <button class="${currentDuration === '15m' ? 'active' : ''}" onclick="switchLogDuration('15m')">15M</button>
       </div>
-      <div class="mode-toggle" id="log-mode-toggle">
-        <button class="mode-safe-btn ${currentMode === 'safe' ? 'active' : ''}" onclick="setMode('safe')">SAFE</button>
-        <button class="mode-risk-btn ${currentMode === 'risk' ? 'active' : ''}" onclick="setMode('risk')">RISK</button>
-      </div>
       <div class="status-live">
         <div class="heartbeat-dot"></div>
         <span>live</span>
@@ -1466,7 +1417,6 @@
       <tr>
         <th>Time</th>
         <th>Duration</th>
-        <th>Mode</th>
         <th>Signal</th>
         <th>Score</th>
         <th>Edge</th>
@@ -1523,25 +1473,7 @@ tutorialNext.addEventListener('click', () => {
 
 // --- Duration Toggle (Phase 10) ---
 let currentDuration = '1h';
-let currentMode = 'safe';
-
-function setMode(mode) {
-  currentMode = mode;
-  // Update all mode toggles (dashboard + log page)
-  document.querySelectorAll('.mode-safe-btn').forEach(b => b.classList.toggle('active', mode === 'safe'));
-  document.querySelectorAll('.mode-risk-btn').forEach(b => b.classList.toggle('active', mode === 'risk'));
-  poll();
-  // If signal log page is visible, re-fetch with new mode
-  const logPageEl = document.getElementById('signal-log-page');
-  if (logPageEl && logPageEl.classList.contains('active')) {
-    logPage = 0;
-    if (logViewMode === 'batched') {
-      loadBatchView();
-    } else {
-      loadLogPage();
-    }
-  }
-}
+let frozenDurations = new Set();
 
 function setDuration(dur) {
   currentDuration = dur;
@@ -1607,7 +1539,7 @@ function authHeaders() {
 
 async function fetchSignal() {
   try {
-    const resp = await fetch(`${API_BASE}/api/signal?duration=${currentDuration}&mode=${currentMode}`, { headers: authHeaders() });
+    const resp = await fetch(`${API_BASE}/api/signal?duration=${currentDuration}&duration=${currentDuration}`, { headers: authHeaders() });
     if (resp.status === 401) { localStorage.removeItem('verge_secret'); return null; }
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     return await resp.json();
@@ -1619,7 +1551,7 @@ async function fetchSignal() {
 
 async function fetchStats() {
   try {
-    const resp = await fetch(`${API_BASE}/api/stats?duration=${currentDuration}&mode=${currentMode}`, { headers: authHeaders() });
+    const resp = await fetch(`${API_BASE}/api/stats?duration=${currentDuration}&duration=${currentDuration}`, { headers: authHeaders() });
     if (resp.status === 401) { localStorage.removeItem('verge_secret'); return null; }
     if (!resp.ok) return null;
     return await resp.json();
@@ -1630,7 +1562,7 @@ async function fetchStats() {
 
 async function fetchPerformance() {
   try {
-    const resp = await fetch(`${API_BASE}/api/performance?duration=${currentDuration}&mode=${currentMode}`, { headers: authHeaders() });
+    const resp = await fetch(`${API_BASE}/api/performance?duration=${currentDuration}&duration=${currentDuration}`, { headers: authHeaders() });
     if (resp.status === 401) { localStorage.removeItem('verge_secret'); return null; }
     if (!resp.ok) return null;
     return await resp.json();
@@ -1647,6 +1579,54 @@ async function fetchCandles() {
     return await resp.json();
   } catch (e) {
     return null;
+  }
+}
+
+async function fetchFrozenDurations() {
+  try {
+    const resp = await fetch(`${API_BASE}/api/frozen`, { headers: authHeaders() });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    frozenDurations = new Set(data.frozen || []);
+  } catch (e) {
+    frozenDurations = new Set();
+  }
+}
+
+async function toggleFreeze(duration) {
+  const frozen = frozenDurations.has(duration);
+  try {
+    const resp = await fetch(`${API_BASE}/api/admin/freeze?duration=${duration}&frozen=${!frozen}`, {
+      method: 'POST',
+      headers: authHeaders()
+    });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (data.frozen) {
+      frozenDurations.add(duration);
+    } else {
+      frozenDurations.delete(duration);
+    }
+    updateFreezeUI();
+  } catch (e) {
+    console.error('Freeze toggle failed:', e);
+  }
+}
+
+function updateFreezeUI() {
+  // Update lock icons
+  document.querySelectorAll('.freeze-lock').forEach(el => {
+    const dur = el.dataset.duration;
+    const isFrozen = frozenDurations.has(dur);
+    el.textContent = isFrozen ? '\uD83D\uDD12' : '\uD83D\uDD13';
+    el.title = isFrozen ? `Unfreeze ${dur}` : `Freeze ${dur}`;
+    el.classList.toggle('frozen', isFrozen);
+  });
+  // Update frozen banner
+  const banner = document.getElementById('frozen-banner');
+  if (banner) {
+    const isCurrentFrozen = frozenDurations.has(currentDuration);
+    banner.style.display = isCurrentFrozen ? 'flex' : 'none';
   }
 }
 
@@ -1849,7 +1829,7 @@ function renderDashboard(signal, stats, performance) {
   const decisionDisplay = decision === 'BET HIGHER' ? '\u25B2 BET UP' : decision === 'BET LOWER' ? '\u25BC BET DOWN' : '\u2726 SKIP';
 
   const confidence = signal.confidence || 'none';
-  const confidenceClass = confidence === 'forced' ? 'forced' : confidence === 'high' ? 'high' : confidence === 'medium' ? 'medium' : 'low';
+  const confidenceClass = confidence === 'high' ? 'high' : confidence === 'medium' ? 'medium' : 'low';
 
   minutesRemaining = signal.market?.minutes_remaining || 0;
   secondsRemaining = (signal.market?.minutes_remaining || 0) * 60 + (signal.market?.seconds_remaining || 0);
@@ -1902,19 +1882,21 @@ function renderDashboard(signal, stats, performance) {
         <div class="status-asset" id="status-asset">BTC</div>
         <div class="duration-toggle" id="duration-toggle">
           <button id="dur-1h" class="active" onclick="setDuration('1h')">1H</button>
+          <span class="freeze-lock" data-duration="1h" onclick="toggleFreeze('1h')" title="Freeze 1H">${frozenDurations.has('1h') ? '\uD83D\uDD12' : '\uD83D\uDD13'}</span>
           <button id="dur-15m" onclick="setDuration('15m')">15M</button>
         </div>
-        <div class="mode-toggle" id="mode-toggle">
-          <button class="mode-safe-btn active" onclick="setMode('safe')">SAFE</button>
-          <button class="mode-risk-btn" onclick="setMode('risk')">RISK</button>
-        </div>
-        <div class="mode-indicator ${currentMode}">${currentMode === 'safe' ? 'SAFE MODE' : 'RISK MODE'}</div>
         <div id="fear-greed-badge" class="status-badge" style="display:none">F&G: <span id="fear-greed-value">—</span></div>
         <div class="status-live">
           <div class="heartbeat-dot" id="heartbeat-dot"></div>
           <span>live</span>
         </div>
       </div>
+    </div>
+
+    <!-- Frozen Banner -->
+    <div id="frozen-banner" class="frozen-banner" style="display:${frozenDurations.has(currentDuration) ? 'flex' : 'none'}">
+      <span class="frozen-icon">\uD83D\uDD12</span>
+      <span>${currentDuration.toUpperCase()} is frozen — showing historical data only, no new signals</span>
     </div>
 
     <!-- Decision Band -->
@@ -2092,9 +2074,8 @@ function renderDashboard(signal, stats, performance) {
   const approxNote = document.getElementById('approx-note');
   if (approxNote) approxNote.style.display = currentDuration === '15m' ? 'block' : 'none';
 
-  // Restore mode toggle state after re-render
-  document.querySelectorAll('.mode-safe-btn').forEach(b => b.classList.toggle('active', currentMode === 'safe'));
-  document.querySelectorAll('.mode-risk-btn').forEach(b => b.classList.toggle('active', currentMode === 'risk'));
+  // Update freeze UI
+  updateFreezeUI();
 
   // Fear & Greed badge
   const fgBadge = document.getElementById('fear-greed-badge');
@@ -2247,7 +2228,7 @@ async function poll() {
 }
 
 // Initial load
-poll();
+fetchFrozenDurations().then(() => poll());
 
 // Start polling intervals
 window._pollInterval = setInterval(poll, 30000);
@@ -2317,7 +2298,7 @@ function switchLogView(mode) {
 async function loadLogPage() {
   const offset = logPage * LOG_PAGE_SIZE;
   try {
-    const resp = await fetch(`${API_BASE}/api/signal-log?offset=${offset}&limit=${LOG_PAGE_SIZE}&duration=${currentDuration}&mode=${currentMode}`, { headers: authHeaders() });
+    const resp = await fetch(`${API_BASE}/api/signal-log?offset=${offset}&limit=${LOG_PAGE_SIZE}&duration=${currentDuration}&duration=${currentDuration}`, { headers: authHeaders() });
     if (!resp.ok) return;
     const data = await resp.json();
     renderLogTable(data.signals, data.total);
@@ -2330,7 +2311,7 @@ async function loadBatchView() {
   const container = document.getElementById('log-batch-view');
   if (!container) return;
   try {
-    const resp = await fetch(`${API_BASE}/api/signal-log/batches?duration=${currentDuration}&mode=${currentMode}`, { headers: authHeaders() });
+    const resp = await fetch(`${API_BASE}/api/signal-log/batches?duration=${currentDuration}&duration=${currentDuration}`, { headers: authHeaders() });
     if (!resp.ok) return;
     const data = await resp.json();
     renderBatchView(data.batches);
@@ -2385,7 +2366,7 @@ async function toggleBatch(batchNum, offset, count) {
   // Load signals for this batch
   if (body.dataset.loaded) return;
   try {
-    const resp = await fetch(`${API_BASE}/api/signal-log?offset=${offset}&limit=${count}&duration=${currentDuration}&mode=${currentMode}`, { headers: authHeaders() });
+    const resp = await fetch(`${API_BASE}/api/signal-log?offset=${offset}&limit=${count}&duration=${currentDuration}&duration=${currentDuration}`, { headers: authHeaders() });
     if (!resp.ok) return;
     const data = await resp.json();
     body.innerHTML = renderBatchTable(data.signals);
@@ -2398,7 +2379,7 @@ async function toggleBatch(batchNum, offset, count) {
 function renderBatchTable(signals) {
   if (!signals || signals.length === 0) return '<div style="color:var(--static);padding:12px;">No signals in this batch</div>';
   return `<table class="log-table"><thead><tr>
-    <th>Time</th><th>Duration</th><th>Mode</th><th>Signal</th><th>Score</th><th>Edge</th><th>Result</th>
+    <th>Time</th><th>Duration</th><th>Signal</th><th>Score</th><th>Edge</th><th>Result</th>
   </tr></thead><tbody>${signals.map(s => {
     const dt = new Date(s.market_window_start);
     const time = dt.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/New_York' });
@@ -2406,9 +2387,6 @@ function renderBatchTable(signals) {
     const dec = s.final_decision || 'SKIP';
     const decDisplay = dec === 'BET HIGHER' ? 'BET UP' : dec === 'BET LOWER' ? 'BET DOWN' : 'SKIP';
     const decCls = dec === 'BET HIGHER' ? 'bet-up' : dec === 'BET LOWER' ? 'bet-down' : 'skip';
-    const modeBadge = s.mode === 'risk'
-      ? '<span class="mode-badge risk">RISK</span>'
-      : '<span class="mode-badge safe">SAFE</span>';
     let result = '\u2014';
     if (dec !== 'SKIP' && s.resolved_outcome) {
       const won = (dec === 'BET HIGHER' && s.resolved_outcome === 'UP') || (dec === 'BET LOWER' && s.resolved_outcome === 'DOWN');
@@ -2419,7 +2397,7 @@ function renderBatchTable(signals) {
       result = '<span class="signal-outcome pending">\u23F3</span>';
     }
     return `<tr>
-      <td>${time}</td><td>${dur}</td><td>${modeBadge}</td>
+      <td>${time}</td><td>${dur}</td>
       <td><span class="signal-log-decision ${decCls}">${decDisplay}</span></td>
       <td>${(s.score > 0 ? '+' : '') + (s.score || 0).toFixed(2)}</td>
       <td>${(s.edge_pct > 0 ? '+' : '') + (s.edge_pct || 0).toFixed(1)}%</td>
@@ -2439,9 +2417,6 @@ function renderLogTable(signals, total) {
     const dec = s.final_decision || 'SKIP';
     const decDisplay = dec === 'BET HIGHER' ? 'BET UP' : dec === 'BET LOWER' ? 'BET DOWN' : 'SKIP';
     const decCls = dec === 'BET HIGHER' ? 'bet-up' : dec === 'BET LOWER' ? 'bet-down' : 'skip';
-    const modeBadge = s.mode === 'risk'
-      ? '<span class="mode-badge risk">RISK</span>'
-      : '<span class="mode-badge safe">SAFE</span>';
 
     let result = '—';
     if (dec !== 'SKIP' && s.resolved_outcome) {
@@ -2456,7 +2431,6 @@ function renderLogTable(signals, total) {
     return `<tr>
       <td>${time}</td>
       <td>${dur}</td>
-      <td>${modeBadge}</td>
       <td><span class="signal-log-decision ${decCls}">${decDisplay}</span></td>
       <td>${(s.score > 0 ? '+' : '') + (s.score || 0).toFixed(2)}</td>
       <td>${(s.edge_pct > 0 ? '+' : '') + (s.edge_pct || 0).toFixed(1)}%</td>
@@ -2481,7 +2455,7 @@ function renderLogTable(signals, total) {
 
 async function openSignalModal(signalId) {
   try {
-    const resp = await fetch(`${API_BASE}/api/signal-log?offset=0&limit=1000&duration=${currentDuration}&mode=${currentMode}`, { headers: authHeaders() });
+    const resp = await fetch(`${API_BASE}/api/signal-log?offset=0&limit=1000&duration=${currentDuration}&duration=${currentDuration}`, { headers: authHeaders() });
     if (!resp.ok) return;
     const data = await resp.json();
     const sig = data.signals.find(s => s.id === signalId);
@@ -2510,7 +2484,7 @@ async function openSignalModal(signalId) {
 
     document.getElementById('modal-content').innerHTML = `
       <div class="modal-header">
-        <div class="modal-market">BTC ${durLabel} &bull; ${dayStr} ${timeRange} <span class="mode-badge ${sig.mode === 'risk' ? 'risk' : 'safe'}">${sig.mode === 'risk' ? 'RISK' : 'SAFE'}</span></div>
+        <div class="modal-market">BTC ${durLabel} &bull; ${dayStr} ${timeRange}</div>
         <button class="modal-close" onclick="closeSignalModal()">&times;</button>
       </div>
 

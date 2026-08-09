@@ -8,6 +8,7 @@ Tables:
 """
 import os
 import time
+import json
 import logging
 from dataclasses import dataclass, field
 
@@ -38,6 +39,22 @@ def get_setting(client: Client, key: str) -> str | None:
 def set_setting(client: Client, key: str, value: str) -> None:
     """Write or update a setting in the settings table."""
     client.table("settings").upsert({"key": key, "value": value}).execute()
+
+
+def get_frozen_durations(client) -> set[str]:
+    """Return the set of currently frozen durations (e.g. {'1h'})."""
+    val = get_setting(client, "frozen_durations")
+    return set(json.loads(val)) if val else set()
+
+
+def set_duration_frozen(client, duration: str, frozen: bool) -> None:
+    """Add or remove a duration from the frozen set."""
+    current = get_frozen_durations(client)
+    if frozen:
+        current.add(duration)
+    else:
+        current.discard(duration)
+    set_setting(client, "frozen_durations", json.dumps(sorted(current)))
 
 
 # --- Schema SQL (for reference / manual setup) ---
@@ -311,7 +328,7 @@ def get_unresolved_trades(client: Client, duration: str | None = None) -> list[d
     return result.data
 
 
-def get_recent_signals(client: Client, limit: int = 10, duration: str | None = None, mode: str | None = None) -> list[dict]:
+def get_recent_signals(client: Client, limit: int = 10, duration: str | None = None) -> list[dict]:
     """Get the most recent signals (all decisions, including SKIP) with resolution.
 
     Uses PostgREST embedded resource query to fetch paper_trades in a single
@@ -319,22 +336,19 @@ def get_recent_signals(client: Client, limit: int = 10, duration: str | None = N
 
     Args:
         duration: if provided, filter to this duration only
-        mode: if provided, filter to this mode only
     """
     query = (
         client.table("signals")
         .select(
             "id, final_decision, market_window_start, timestamp, score, market_duration, "
             "strike_price, current_price, odds, edge_pct, rsi, ma_signal, volume_signal, "
-            "note, divergence_signal, fear_greed_value, mode, "
+            "note, divergence_signal, fear_greed_value, "
             "paper_trades!signal_id(resolved_outcome, simulated_pnl, decision)"
         )
         .order("id", desc=True)
     )
     if duration:
         query = query.eq("market_duration", duration)
-    if mode:
-        query = query.eq("mode", mode)
     result = query.limit(limit).execute()
     signals = result.data
 
@@ -351,7 +365,7 @@ def get_recent_signals(client: Client, limit: int = 10, duration: str | None = N
     return signals
 
 
-def get_performance_summary(client: Client, duration: str | None = None, mode: str | None = None) -> dict:
+def get_performance_summary(client: Client, duration: str | None = None) -> dict:
     """Rolling performance over last 200 signals.
 
     Uses PostgREST embedded resource query to avoid N+1 per-signal round-trips.
@@ -368,8 +382,6 @@ def get_performance_summary(client: Client, duration: str | None = None, mode: s
     )
     if duration:
         query = query.eq("market_duration", duration)
-    if mode:
-        query = query.eq("mode", mode)
     signals = query.limit(200).execute().data
 
     total = len(signals)
@@ -416,7 +428,7 @@ def get_performance_summary(client: Client, duration: str | None = None, mode: s
 
 
 def get_paginated_signals(
-    client: Client, offset: int = 0, limit: int = 25, duration: str | None = None, mode: str | None = None
+    client: Client, offset: int = 0, limit: int = 25, duration: str | None = None
 ) -> dict:
     """Paginated signal log with resolution data.
 
@@ -427,8 +439,6 @@ def get_paginated_signals(
     count_query = client.table("signals").select("id", count="exact")
     if duration:
         count_query = count_query.eq("market_duration", duration)
-    if mode:
-        count_query = count_query.eq("mode", mode)
     count_result = count_query.execute()
     total = count_result.count if hasattr(count_result, "count") else 0
 
@@ -438,15 +448,13 @@ def get_paginated_signals(
         .select(
             "id, final_decision, market_window_start, timestamp, score, market_duration, "
             "strike_price, current_price, odds, edge_pct, rsi, ma_signal, volume_signal, "
-            "note, divergence_signal, fear_greed_value, mode, "
+            "note, divergence_signal, fear_greed_value, "
             "paper_trades!signal_id(resolved_outcome, simulated_pnl, decision)"
         )
         .order("id", desc=True)
     )
     if duration:
         query = query.eq("market_duration", duration)
-    if mode:
-        query = query.eq("mode", mode)
     result = query.range(offset, offset + limit - 1).execute()
     signals = result.data
 
@@ -463,7 +471,7 @@ def get_paginated_signals(
     return {"signals": signals, "total": total}
 
 
-def get_batch_summaries(client: Client, duration: str | None = None, mode: str | None = None, batch_size: int = 200) -> dict:
+def get_batch_summaries(client: Client, duration: str | None = None, batch_size: int = 200) -> dict:
     """Per-batch performance summaries for the signal log.
 
     Groups signals into batches of `batch_size` and returns summary stats
@@ -475,15 +483,13 @@ def get_batch_summaries(client: Client, duration: str | None = None, mode: str |
     query = (
         client.table("signals")
         .select(
-            "id, final_decision, market_duration, mode, "
+            "id, final_decision, market_duration, "
             "paper_trades!signal_id(resolved_outcome, simulated_pnl, decision)"
         )
         .order("id", desc=True)
     )
     if duration:
         query = query.eq("market_duration", duration)
-    if mode:
-        query = query.eq("mode", mode)
     signals = query.execute().data
 
     total = len(signals)
@@ -537,22 +543,18 @@ def get_batch_summaries(client: Client, duration: str | None = None, mode: str |
     return {"batches": batches, "total_batches": len(batches)}
 
 
-def get_stats(client: Client, duration: str | None = None, mode: str | None = None) -> dict:
+def get_stats(client: Client, duration: str | None = None) -> dict:
     """Aggregate stats over paper_trades, including recent trades for history band.
 
     Args:
         duration: if provided, filter to this duration only.
                   If None, returns combined stats across all durations.
-        mode: if provided, filter to this mode only ("safe" or "risk").
-              Graduation gate always uses safe mode internally.
     """
     query = client.table("paper_trades").select(
-        "decision, resolved_outcome, simulated_pnl, market_window_start, market_duration, mode"
+        "decision, resolved_outcome, simulated_pnl, market_window_start, market_duration"
     ).order("id", desc=True)
     if duration:
         query = query.eq("market_duration", duration)
-    if mode:
-        query = query.eq("mode", mode)
     trades = query.execute().data
 
     total = len(trades)
@@ -566,21 +568,11 @@ def get_stats(client: Client, duration: str | None = None, mode: str | None = No
     recent = resolved[:10] if resolved else []
 
     # Recent signals for signal log (all decisions, last 10)
-    recent_signals = get_recent_signals(client, limit=10, duration=duration, mode=mode)
+    recent_signals = get_recent_signals(client, limit=10, duration=duration)
 
-    # 6.4 — Graduation gate: ALWAYS scoped to safe mode only
-    # Risk mode trades must never count toward graduation
-    safe_trades = [t for t in trades if t.get("mode", "safe") == "safe"] if mode != "risk" else []
-    if mode is None:
-        # No mode filter — query safe-mode trades specifically for gate
-        safe_query = client.table("paper_trades").select(
-            "resolved_outcome, simulated_pnl, mode"
-        ).eq("mode", "safe")
-        if duration:
-            safe_query = safe_query.eq("market_duration", duration)
-        safe_trades = safe_query.execute().data
-    safe_resolved = [t for t in safe_trades if t.get("resolved_outcome")]
-    safe_total = len(safe_trades)
+    # Graduation gate: count all trades (all are safe mode now)
+    safe_resolved = [t for t in trades if t.get("resolved_outcome")]
+    safe_total = len(trades)
     safe_cumulative_pnl = sum(t.get("simulated_pnl", 0) for t in safe_resolved)
     unlock_real_orders = safe_total >= 200 and safe_cumulative_pnl > 0
 
@@ -597,7 +589,7 @@ def get_stats(client: Client, duration: str | None = None, mode: str | None = No
     }
 
 
-def get_rolling_stats(client: Client, duration: str | None = None, mode: str | None = None, window: int = 30) -> dict:
+def get_rolling_stats(client: Client, duration: str | None = None, window: int = 30) -> dict:
     """Rolling-window performance over last N resolved trades.
 
     Catches strategy degradation that cumulative stats can hide.
@@ -616,8 +608,6 @@ def get_rolling_stats(client: Client, duration: str | None = None, mode: str | N
     )
     if duration:
         query = query.eq("market_duration", duration)
-    if mode:
-        query = query.eq("mode", mode)
     trades = query.limit(window).execute().data
 
     count = len(trades)
@@ -637,65 +627,6 @@ def get_rolling_stats(client: Client, duration: str | None = None, mode: str | N
     }
 
 
-def get_comparison_stats(client: Client, duration: str | None = None) -> dict:
-    """Compare safe-mode vs risk-mode performance, controlling for calendar time.
-
-    Returns:
-        safe: safe-mode win rate, ROI, trade count
-        risk_all: risk-mode stats across all time
-        risk_controlled: risk-mode stats restricted to safe-mode's time window
-    """
-    def _calc_stats(trades):
-        resolved = [t for t in trades if t.get("resolved_outcome")]
-        wins = [t for t in resolved if (t.get("simulated_pnl") or 0) > 0]
-        total_pnl = sum(t.get("simulated_pnl") or 0 for t in resolved)
-        win_rate = len(wins) / len(resolved) * 100 if resolved else 0
-        roi_pct = total_pnl / len(resolved) * 100 if resolved else 0
-        return {
-            "total": len(trades),
-            "resolved": len(resolved),
-            "win_rate": round(win_rate, 1),
-            "cumulative_pnl": round(total_pnl, 2),
-            "roi_pct": round(roi_pct, 1),
-        }
-
-    # Query safe-mode trades
-    safe_q = (
-        client.table("paper_trades")
-        .select("resolved_outcome, simulated_pnl, market_window_start, mode")
-        .eq("mode", "safe")
-        .order("market_window_start", desc=False)
-    )
-    if duration:
-        safe_q = safe_q.eq("market_duration", duration)
-    safe_trades = safe_q.execute().data
-
-    # Query all risk-mode trades
-    risk_q = (
-        client.table("paper_trades")
-        .select("resolved_outcome, simulated_pnl, market_window_start, mode")
-        .eq("mode", "risk")
-        .order("market_window_start", desc=False)
-    )
-    if duration:
-        risk_q = risk_q.eq("market_duration", duration)
-    risk_all_trades = risk_q.execute().data
-
-    # Risk-mode trades restricted to safe-mode's time window
-    risk_controlled_trades = []
-    if safe_trades and risk_all_trades:
-        safe_first = safe_trades[0].get("market_window_start", 0)
-        safe_last = safe_trades[-1].get("market_window_start", 0)
-        risk_controlled_trades = [
-            t for t in risk_all_trades
-            if safe_first <= (t.get("market_window_start") or 0) <= safe_last
-        ]
-
-    return {
-        "safe": _calc_stats(safe_trades),
-        "risk_all": _calc_stats(risk_all_trades),
-        "risk_controlled": _calc_stats(risk_controlled_trades),
-    }
 
 
 def get_price_snapshots(
