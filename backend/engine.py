@@ -536,20 +536,19 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
         suggested_price = round((1 - odds) * discount, 2)
 
     # Strike + current price (prefer Polymarket's official priceToBeat)
-    # 1. Polymarket WebSocket feed (canonical resolution source, Phase 2.1)
+    # 1. Polymarket WebSocket feed (Chainlink BTC price — same as Polymarket's UI)
     ws_price = None
-    if duration == "15m":
-        try:
-            import asyncio
-            from data_fetcher import get_polymarket_chainlink_price
-            ws_result = asyncio.get_event_loop().run_until_complete(
-                get_polymarket_chainlink_price(timeout_s=4.0)
-            )
-            if ws_result:
-                ws_price, _ = ws_result
-                log.info(f"[15m] WebSocket live price: ${ws_price:,.2f}")
-        except Exception as e:
-            log.debug(f"WebSocket price fetch failed (non-fatal): {e}")
+    try:
+        import asyncio
+        from data_fetcher import get_polymarket_chainlink_price
+        ws_result = asyncio.get_event_loop().run_until_complete(
+            get_polymarket_chainlink_price(timeout_s=4.0)
+        )
+        if ws_result:
+            ws_price, _ = ws_result
+            log.info(f"[{duration}] WebSocket live price: ${ws_price:,.2f}")
+    except Exception as e:
+        log.debug(f"WebSocket price fetch failed (non-fatal): {e}")
 
     # 2. CoinGecko spot → candle close fallback
     spot = get_spot_price()
@@ -568,11 +567,6 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
             strike_price = parse_strike_from_text(market)
             if strike_price is not None:
                 log.info(f"[{duration}] Strike from text parsing: ${strike_price:,.2f}")
-
-    if strike_price is None and duration == "15m" and ws_price is not None:
-        # 15m: Use WebSocket live price as strike approximation (same oracle network)
-        strike_price = ws_price
-        log.info(f"[15m] Strike from WebSocket (Polymarket feed): ${strike_price:,.2f}")
 
     if strike_price is None:
         log.info(f"[{duration}] All extraction methods failed, using candle/Chainlink fallback")
