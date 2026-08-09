@@ -370,7 +370,7 @@ def stats():
         client = db.get_client()
         result = db.get_stats(client, duration=duration, mode=mode)
         # Add rolling-window stats (last 30 resolved trades)
-        rolling = db.get_rolling_stats(client, duration=duration)
+        rolling = db.get_rolling_stats(client, duration=duration, mode=mode)
         result.update(rolling)
         return jsonify(result)
     except Exception as e:
@@ -444,8 +444,9 @@ def performance():
     try:
         import db
         duration = request.args.get("duration")
+        mode = request.args.get("mode")
         client = db.get_client()
-        result = db.get_performance_summary(client, duration=duration)
+        result = db.get_performance_summary(client, duration=duration, mode=mode)
         return jsonify(result)
     except Exception as e:
         log.warning(f"Performance query failed: {e}")
@@ -463,8 +464,9 @@ def signal_log():
         offset = int(request.args.get("offset", 0))
         limit = int(request.args.get("limit", 25))
         duration = request.args.get("duration")
+        mode = request.args.get("mode")
         client = db.get_client()
-        result = db.get_paginated_signals(client, offset=offset, limit=limit, duration=duration)
+        result = db.get_paginated_signals(client, offset=offset, limit=limit, duration=duration, mode=mode)
         return jsonify(result)
     except Exception as e:
         log.warning(f"Signal log query failed: {e}")

@@ -308,7 +308,7 @@ def get_unresolved_trades(client: Client, duration: str | None = None) -> list[d
     return result.data
 
 
-def get_recent_signals(client: Client, limit: int = 10, duration: str | None = None) -> list[dict]:
+def get_recent_signals(client: Client, limit: int = 10, duration: str | None = None, mode: str | None = None) -> list[dict]:
     """Get the most recent signals (all decisions, including SKIP) with resolution.
 
     Uses PostgREST embedded resource query to fetch paper_trades in a single
@@ -316,19 +316,22 @@ def get_recent_signals(client: Client, limit: int = 10, duration: str | None = N
 
     Args:
         duration: if provided, filter to this duration only
+        mode: if provided, filter to this mode only
     """
     query = (
         client.table("signals")
         .select(
             "id, final_decision, market_window_start, timestamp, score, market_duration, "
             "strike_price, current_price, odds, edge_pct, rsi, ma_signal, volume_signal, "
-            "note, divergence_signal, fear_greed_value, "
+            "note, divergence_signal, fear_greed_value, mode, "
             "paper_trades!signal_id(resolved_outcome, simulated_pnl, decision)"
         )
         .order("id", desc=True)
     )
     if duration:
         query = query.eq("market_duration", duration)
+    if mode:
+        query = query.eq("mode", mode)
     result = query.limit(limit).execute()
     signals = result.data
 
@@ -345,7 +348,7 @@ def get_recent_signals(client: Client, limit: int = 10, duration: str | None = N
     return signals
 
 
-def get_performance_summary(client: Client, duration: str | None = None) -> dict:
+def get_performance_summary(client: Client, duration: str | None = None, mode: str | None = None) -> dict:
     """Rolling performance over last 200 signals.
 
     Uses PostgREST embedded resource query to avoid N+1 per-signal round-trips.
@@ -362,6 +365,8 @@ def get_performance_summary(client: Client, duration: str | None = None) -> dict
     )
     if duration:
         query = query.eq("market_duration", duration)
+    if mode:
+        query = query.eq("mode", mode)
     signals = query.limit(200).execute().data
 
     total = len(signals)
@@ -408,7 +413,7 @@ def get_performance_summary(client: Client, duration: str | None = None) -> dict
 
 
 def get_paginated_signals(
-    client: Client, offset: int = 0, limit: int = 25, duration: str | None = None
+    client: Client, offset: int = 0, limit: int = 25, duration: str | None = None, mode: str | None = None
 ) -> dict:
     """Paginated signal log with resolution data.
 
@@ -419,6 +424,8 @@ def get_paginated_signals(
     count_query = client.table("signals").select("id", count="exact")
     if duration:
         count_query = count_query.eq("market_duration", duration)
+    if mode:
+        count_query = count_query.eq("mode", mode)
     count_result = count_query.execute()
     total = count_result.count if hasattr(count_result, "count") else 0
 
@@ -428,13 +435,15 @@ def get_paginated_signals(
         .select(
             "id, final_decision, market_window_start, timestamp, score, market_duration, "
             "strike_price, current_price, odds, edge_pct, rsi, ma_signal, volume_signal, "
-            "note, divergence_signal, fear_greed_value, "
+            "note, divergence_signal, fear_greed_value, mode, "
             "paper_trades!signal_id(resolved_outcome, simulated_pnl, decision)"
         )
         .order("id", desc=True)
     )
     if duration:
         query = query.eq("market_duration", duration)
+    if mode:
+        query = query.eq("mode", mode)
     result = query.range(offset, offset + limit - 1).execute()
     signals = result.data
 
@@ -480,7 +489,7 @@ def get_stats(client: Client, duration: str | None = None, mode: str | None = No
     recent = resolved[:10] if resolved else []
 
     # Recent signals for signal log (all decisions, last 10)
-    recent_signals = get_recent_signals(client, limit=10, duration=duration)
+    recent_signals = get_recent_signals(client, limit=10, duration=duration, mode=mode)
 
     # 6.4 — Graduation gate: ALWAYS scoped to safe mode only
     # Risk mode trades must never count toward graduation
@@ -511,7 +520,7 @@ def get_stats(client: Client, duration: str | None = None, mode: str | None = No
     }
 
 
-def get_rolling_stats(client: Client, duration: str | None = None, window: int = 30) -> dict:
+def get_rolling_stats(client: Client, duration: str | None = None, mode: str | None = None, window: int = 30) -> dict:
     """Rolling-window performance over last N resolved trades.
 
     Catches strategy degradation that cumulative stats can hide.
@@ -530,6 +539,8 @@ def get_rolling_stats(client: Client, duration: str | None = None, window: int =
     )
     if duration:
         query = query.eq("market_duration", duration)
+    if mode:
+        query = query.eq("mode", mode)
     trades = query.limit(window).execute().data
 
     count = len(trades)
