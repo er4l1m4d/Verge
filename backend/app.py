@@ -138,6 +138,8 @@ def signal():
             "strike_price": sig.strike_price,
             "current_price": sig.current_price,
             "note": sig.note,
+            "divergence_signal": sig.divergence_signal,
+            "fear_greed_value": sig.fear_greed_value,
         })
     except Exception as e:
         log.exception("Signal generation failed")

@@ -20,6 +20,7 @@ MARKET_CONFIG = {
         # Market discovery
         "window_ms": 3_600_000,                    # 60 minutes
         "series_slug": "btc-up-or-down-hourly",    # Gamma API filter
+        "series_id": "10191",                       # Gamma series numeric ID (fallback)
         "slug_prefix": "bitcoin-up-or-down-",       # fallback discovery
 
         # Price source
@@ -51,6 +52,7 @@ MARKET_CONFIG = {
         # Market discovery
         "window_ms": 900_000,                      # 15 minutes
         "series_slug": "btc-up-or-down-15m",       # Gamma API filter (verified Phase 1)
+        "series_id": "10192",                       # Gamma series numeric ID (fallback)
         "slug_prefix": "btc-updown-15m-",          # fallback discovery
 
         # Price source

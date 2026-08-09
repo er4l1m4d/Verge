@@ -14,12 +14,64 @@ from dataclasses import dataclass
 sys.path.insert(0, os.path.dirname(__file__))
 
 from market_config import get_config, supported_durations
-from data_fetcher import fetch_with_retry
+from data_fetcher import fetch_with_retry, _requests_get as _http_get
 
 log = logging.getLogger("verge.engine")
 
 GAMMA_API = "https://gamma-api.polymarket.com"
 CLOB_API = "https://clob.polymarket.com"
+
+# ── Phase 1: Robust Strike-Price Extraction ──────────────────────────
+
+import re
+
+_STRIKE_KEY_PATTERN = re.compile(r"(price|strike|threshold|target|beat)", re.I)
+_PRICE_TO_BEAT_TEXT = re.compile(
+    r"price\s*to\s*beat[^\d$]*\$?\s*([0-9][0-9,]*(?:\.[0-9]+)?)", re.I
+)
+
+
+def extract_strike_from_market(market: dict, max_depth: int = 6) -> float | None:
+    """Walk the entire market JSON looking for a strike-price field.
+
+    Searches for any key matching price|strike|threshold|target|beat,
+    bounded to max_depth levels with a seen-set for circular-reference safety.
+    """
+    seen = set()
+    stack = [(market, 0)]
+    while stack:
+        obj, depth = stack.pop()
+        obj_id = id(obj)
+        if not isinstance(obj, (dict, list)) or obj_id in seen or depth > max_depth:
+            continue
+        seen.add(obj_id)
+
+        items = enumerate(obj) if isinstance(obj, list) else obj.items()
+        for key, value in items:
+            if isinstance(value, (dict, list)):
+                stack.append((value, depth + 1))
+                continue
+            if not _STRIKE_KEY_PATTERN.search(str(key)):
+                continue
+            try:
+                n = float(value)
+            except (TypeError, ValueError):
+                continue
+            if 1_000 < n < 2_000_000:
+                return n
+    return None
+
+
+def parse_strike_from_text(market: dict) -> float | None:
+    """Regex-parse the strike from the market's question or title text."""
+    text = str(market.get("question") or market.get("title") or "")
+    m = _PRICE_TO_BEAT_TEXT.search(text)
+    if not m:
+        return None
+    try:
+        return float(m.group(1).replace(",", ""))
+    except ValueError:
+        return None
 
 
 @dataclass
@@ -48,6 +100,7 @@ class LiveSignal:
     note: str | None = None
     duration: str = "1h"
     divergence_signal: int = 0  # shadow mode: -1, 0, +1 (not in live score yet)
+    fear_greed_value: int | None = None  # daily Fear & Greed index (0-100)
 
 
 def get_current_market(duration: str = "1h") -> dict | None:
@@ -65,11 +118,17 @@ def get_current_market(duration: str = "1h") -> dict | None:
     """
     config = get_config(duration)
     series_slug = config["series_slug"]
+    series_id = config.get("series_id")
     slug_prefix = config["slug_prefix"]
     window_ms = config["window_ms"]
 
     # --- Primary: series_slug query ---
     events = _fetch_events_by_series(series_slug)
+
+    # --- Fallback: series_id query ---
+    if not events and series_id:
+        log.info(f"Series slug query empty for '{series_slug}', trying series_id fallback ({series_id})")
+        events = _fetch_events_by_series_id(series_id)
 
     # --- Fallback: slug-prefix matching ---
     if not events:
@@ -165,12 +224,30 @@ def _fetch_events_by_series(series_slug: str) -> list:
     }
     try:
         resp = fetch_with_retry(
-            lambda: requests.get(f"{GAMMA_API}/events", params=params, timeout=30)
+            lambda: _http_get(f"{GAMMA_API}/events", params=params, timeout=30)
         )
         resp.raise_for_status()
         return resp.json()
     except Exception as e:
         log.warning(f"Gamma API request failed for series '{series_slug}': {e}")
+        return []
+
+
+def _fetch_events_by_series_id(series_id: str) -> list:
+    """Fallback: fetch events from Gamma API filtered by series_id (numeric ID)."""
+    params = {
+        "limit": 20,
+        "series_id": series_id,
+        "closed": "false",
+    }
+    try:
+        resp = fetch_with_retry(
+            lambda: _http_get(f"{GAMMA_API}/events", params=params, timeout=30)
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        log.warning(f"Gamma API request failed for series_id '{series_id}': {e}")
         return []
 
 
@@ -188,7 +265,7 @@ def _fetch_events_by_slug_prefix(slug_prefix: str) -> list:
     }
     try:
         resp = fetch_with_retry(
-            lambda: requests.get(f"{GAMMA_API}/events", params=params, timeout=30)
+            lambda: _http_get(f"{GAMMA_API}/events", params=params, timeout=30)
         )
         resp.raise_for_status()
         events = resp.json()
@@ -213,7 +290,7 @@ def get_current_odds(token_id: str) -> float | None:
     """
     try:
         resp = fetch_with_retry(
-            lambda: requests.get(
+            lambda: _http_get(
                 f"{CLOB_API}/midpoint",
                 params={"token_id": token_id},
                 timeout=15,
@@ -230,7 +307,7 @@ def get_current_odds(token_id: str) -> float | None:
     # Fallback: try prices-history
     try:
         resp = fetch_with_retry(
-            lambda: requests.get(
+            lambda: _http_get(
                 f"{CLOB_API}/prices-history",
                 params={"market": token_id, "interval": "1m", "fidelity": 1},
                 timeout=15,
@@ -453,15 +530,46 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
         suggested_price = round((1 - odds) * discount, 2)
 
     # Strike + current price (prefer Polymarket's official priceToBeat)
+    # 1. Polymarket WebSocket feed (canonical resolution source, Phase 2.1)
+    ws_price = None
+    if duration == "15m":
+        try:
+            import asyncio
+            from data_fetcher import get_polymarket_chainlink_price
+            ws_result = asyncio.get_event_loop().run_until_complete(
+                get_polymarket_chainlink_price(timeout_s=4.0)
+            )
+            if ws_result:
+                ws_price, _ = ws_result
+                log.info(f"[15m] WebSocket live price: ${ws_price:,.2f}")
+        except Exception as e:
+            log.debug(f"WebSocket price fetch failed (non-fatal): {e}")
+
+    # 2. CoinGecko spot → candle close fallback
     spot = get_spot_price()
-    current_price = spot if spot else (float(df_price.iloc[-1]["close"]) if len(df_price) > 0 else None)
+    current_price = ws_price or spot or (float(df_price.iloc[-1]["close"]) if len(df_price) > 0 else None)
 
     # Use Polymarket's official strike if available, else compute from candles
     strike_price = market.get("price_to_beat")
     if strike_price is not None:
         log.info(f"[{duration}] Using official Polymarket strike: ${strike_price:,.2f}")
     else:
-        log.info(f"[{duration}] Official strike unavailable, using fallback")
+        # Phase 1: Recursive key search + text parsing fallback
+        strike_price = extract_strike_from_market(market)
+        if strike_price is not None:
+            log.info(f"[{duration}] Strike from recursive key search: ${strike_price:,.2f}")
+        else:
+            strike_price = parse_strike_from_text(market)
+            if strike_price is not None:
+                log.info(f"[{duration}] Strike from text parsing: ${strike_price:,.2f}")
+
+    if strike_price is None and duration == "15m" and ws_price is not None:
+        # 15m: Use WebSocket live price as strike approximation (same oracle network)
+        strike_price = ws_price
+        log.info(f"[15m] Strike from WebSocket (Polymarket feed): ${strike_price:,.2f}")
+
+    if strike_price is None:
+        log.info(f"[{duration}] All extraction methods failed, using candle/Chainlink fallback")
         if duration == "15m" and hour_open_time is not None:
             # 15m: Prefer Chainlink bars' open (matches Polymarket's resolution source)
             if len(df_price) > 0:
@@ -508,6 +616,7 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
         current_price=current_price,
         duration=duration,
         divergence_signal=div_val,
+        fear_greed_value=fg_value,
     )
 
 
@@ -548,6 +657,7 @@ def persist_signal(sig: LiveSignal) -> None:
         current_price=sig.current_price,
         note=sig.note,
         divergence_signal=sig.divergence_signal,
+        fear_greed_value=sig.fear_greed_value,
     ))
 
     # Write paper trade (only if not SKIP)

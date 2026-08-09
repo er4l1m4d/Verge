@@ -83,6 +83,17 @@
     letter-spacing: 1px;
   }
 
+  .status-badge {
+    padding: 3px 10px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.5);
+    letter-spacing: 0.5px;
+  }
+
   .heartbeat-dot {
     width: 8px;
     height: 8px;
@@ -1704,6 +1715,7 @@ function renderDashboard(signal, stats, performance) {
           <button id="dur-1h" class="active" onclick="setDuration('1h')">1H</button>
           <button id="dur-15m" onclick="setDuration('15m')">15M</button>
         </div>
+        <div id="fear-greed-badge" class="status-badge" style="display:none">F&G: <span id="fear-greed-value">—</span></div>
         <div class="status-live">
           <div class="heartbeat-dot" id="heartbeat-dot"></div>
           <span>live</span>
@@ -1885,6 +1897,16 @@ function renderDashboard(signal, stats, performance) {
   if (dur15m) dur15m.classList.toggle('active', currentDuration === '15m');
   const approxNote = document.getElementById('approx-note');
   if (approxNote) approxNote.style.display = currentDuration === '15m' ? 'block' : 'none';
+
+  // Fear & Greed badge
+  const fgBadge = document.getElementById('fear-greed-badge');
+  const fgValue = document.getElementById('fear-greed-value');
+  if (fgBadge && fgValue && signal.fear_greed_value != null) {
+    fgValue.textContent = signal.fear_greed_value;
+    fgBadge.style.display = 'block';
+  } else if (fgBadge) {
+    fgBadge.style.display = 'none';
+  }
 }
 
 // Cached chart data — candles refresh every 5s, spot updates every 1.5s
@@ -2199,6 +2221,14 @@ async function openSignalModal(signalId) {
             <div class="modal-stat-label">Edge</div>
             <div class="modal-stat-value">${(sig.edge_pct > 0 ? '+' : '') + (sig.edge_pct || 0).toFixed(1)}%</div>
           </div>
+          <div class="modal-stat">
+            <div class="modal-stat-label">Divergence</div>
+            <div class="modal-stat-value" style="font-style:italic;opacity:0.7">${sig.divergence_signal > 0 ? '▲ Fade' : sig.divergence_signal < 0 ? '▼ Fade' : '— None'}</div>
+          </div>
+          ${sig.note ? `<div class="modal-stat" style="grid-column:1/-1">
+            <div class="modal-stat-label">Note</div>
+            <div class="modal-stat-value" style="font-size:12px;opacity:0.7">${sig.note}</div>
+          </div>` : ''}
         </div>
       </div>
 

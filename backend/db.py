@@ -152,6 +152,7 @@ class SignalRow:
     note: str | None = None
     market_duration: str = "1h"
     divergence_signal: int = 0
+    fear_greed_value: int | None = None
 
 
 @dataclass
@@ -202,6 +203,7 @@ def write_signal(client: Client, row: SignalRow) -> int:
         "current_price": row.current_price,
         "note": row.note,
         "divergence_signal": row.divergence_signal,
+        "fear_greed_value": row.fear_greed_value,
     }
     result = client.table("signals").insert(data).execute()
     row_id = result.data[0]["id"]
@@ -315,6 +317,7 @@ def get_recent_signals(client: Client, limit: int = 10, duration: str | None = N
         .select(
             "id, final_decision, market_window_start, timestamp, score, market_duration, "
             "strike_price, current_price, odds, edge_pct, rsi, ma_signal, volume_signal, "
+            "note, divergence_signal, fear_greed_value, "
             "paper_trades!signal_id(resolved_outcome, simulated_pnl, decision)"
         )
         .order("id", desc=True)
@@ -420,6 +423,7 @@ def get_paginated_signals(
         .select(
             "id, final_decision, market_window_start, timestamp, score, market_duration, "
             "strike_price, current_price, odds, edge_pct, rsi, ma_signal, volume_signal, "
+            "note, divergence_signal, fear_greed_value, "
             "paper_trades!signal_id(resolved_outcome, simulated_pnl, decision)"
         )
         .order("id", desc=True)

@@ -16,6 +16,28 @@ COLUMNS = ["open_time", "open", "high", "low", "close", "volume", "close_time"]
 HEADERS = {"User-Agent": "Verge/1.0"}
 
 
+def _get_proxies() -> dict | None:
+    """Return proxy dict from environment variables, or None if unset."""
+    https = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+    http = os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy")
+    if https or http:
+        p = {}
+        if https:
+            p["https"] = https
+        if http:
+            p["http"] = http
+        return p
+    return None
+
+
+def _requests_get(url, **kwargs):
+    """_requests_get wrapper that auto-injects HTTPS_PROXY/HTTP_PROXY."""
+    proxies = _get_proxies()
+    if proxies:
+        kwargs.setdefault("proxies", proxies)
+    return requests.get(url, **kwargs)
+
+
 def fetch_with_retry(fn, retries=2, backoff=1.5):
     """Wrap a fetch call with retry + exponential backoff.
 
@@ -67,7 +89,7 @@ def get_fear_greed_index() -> int | None:
 
     try:
         resp = fetch_with_retry(
-            lambda: requests.get(
+            lambda: _requests_get(
                 "https://api.alternative.me/fng/?limit=1",
                 timeout=10,
             )
@@ -117,7 +139,7 @@ def get_binance_klines(
         }
         try:
             resp = fetch_with_retry(
-                lambda: requests.get(BINANCE_KLINES_URL, params=params, timeout=30)
+                lambda: _requests_get(BINANCE_KLINES_URL, params=params, timeout=30)
             )
             resp.raise_for_status()
             data = resp.json()
@@ -243,7 +265,7 @@ def get_coingecko_ohlc(
     params = {"vs_currency": "usd", "days": days}
 
     try:
-        resp = requests.get(url, params=params, timeout=30)
+        resp = _requests_get(url, params=params, timeout=30)
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
@@ -275,7 +297,7 @@ def get_spot_price() -> float | None:
     """Fetch current BTC-USD spot price. Fast path first, fallback to CoinGecko."""
     # Fast path: Coinbase ticker (no key, faster than CoinGecko)
     try:
-        r = requests.get(
+        r = _requests_get(
             "https://api.coinbase.com/v2/prices/BTC-USD/spot",
             headers=HEADERS,
             timeout=5,
@@ -286,7 +308,7 @@ def get_spot_price() -> float | None:
         pass
     # Fallback: CoinGecko
     try:
-        r = requests.get(
+        r = _requests_get(
             "https://api.coingecko.com/api/v3/simple/price",
             params={"ids": "bitcoin", "vs_currencies": "usd"},
             headers=HEADERS,
@@ -315,7 +337,7 @@ def get_coinbase_candles(
     params = {"granularity": granularity, "limit": limit}
 
     try:
-        resp = requests.get(COINBASE_CANDLES_URL, params=params, timeout=30)
+        resp = _requests_get(COINBASE_CANDLES_URL, params=params, timeout=30)
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
@@ -367,7 +389,7 @@ def get_price_at_time(target_ms: int) -> float | None:
         "end": datetime.utcfromtimestamp(end_s).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     try:
-        resp = requests.get(COINBASE_CANDLES_URL, params=params, timeout=15)
+        resp = _requests_get(COINBASE_CANDLES_URL, params=params, timeout=15)
         resp.raise_for_status()
         data = resp.json()
         if data:
@@ -407,6 +429,46 @@ def get_price_with_fallback(
     # Coinbase failed — try CoinGecko (no volume)
     log.warning("Binance/Coinbase unavailable, falling back to CoinGecko (no volume)")
     return get_coingecko_ohlc(days=1)
+
+
+# ── Polymarket Live WebSocket Price Feed (Phase 2.1) ──────────────────
+
+async def get_polymarket_chainlink_price(timeout_s: float = 5.0) -> tuple[float, int] | None:
+    """Read BTC price from Polymarket's live WebSocket feed.
+
+    This is the literal feed Polymarket's own UI reads from — the canonical
+    resolution source for 15-minute markets. Opens a short-lived connection,
+    subscribes, captures the first BTC message, and closes.
+
+    Returns (price, timestamp_ms) or None on any failure.
+    """
+    import asyncio
+    import json
+    import websockets
+
+    url = "wss://ws-live-data.polymarket.com"
+    try:
+        async with websockets.connect(url, open_timeout=10) as ws:
+            await ws.send(json.dumps({
+                "action": "subscribe",
+                "subscriptions": [{"topic": "crypto_prices_chainlink", "type": "*", "filters": ""}],
+            }))
+            async with asyncio.timeout(timeout_s):
+                while True:
+                    raw = await ws.recv()
+                    data = json.loads(raw)
+                    if data.get("topic") != "crypto_prices_chainlink":
+                        continue
+                    payload = data.get("payload") or {}
+                    symbol = str(payload.get("symbol") or payload.get("pair") or "").lower()
+                    if "btc" not in symbol:
+                        continue
+                    price = payload.get("value") or payload.get("price")
+                    ts = payload.get("timestamp") or payload.get("updatedAt")
+                    if price is not None:
+                        return float(price), int(float(ts) * 1000) if ts else None
+    except Exception:
+        return None
 
 
 if __name__ == "__main__":
