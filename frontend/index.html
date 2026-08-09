@@ -1058,6 +1058,103 @@
     color: var(--chalk);
   }
 
+  .log-view-toggle {
+    margin-left: auto;
+    display: flex;
+    gap: 0;
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+
+  .log-view-toggle button {
+    background: transparent;
+    border: none;
+    color: var(--static);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 5px 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .log-view-toggle button.active {
+    background: rgba(255,255,255,0.08);
+    color: var(--chalk);
+  }
+
+  .log-view-toggle button:hover:not(.active) {
+    color: var(--chalk);
+  }
+
+  .batch-section {
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 8px;
+    margin-bottom: 12px;
+    overflow: hidden;
+  }
+
+  .batch-header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 16px;
+    background: rgba(255,255,255,0.03);
+    cursor: pointer;
+    transition: background 0.2s;
+    font-family: var(--font-mono);
+    font-size: 12px;
+  }
+
+  .batch-header:hover {
+    background: rgba(255,255,255,0.06);
+  }
+
+  .batch-header .batch-label {
+    color: var(--chalk);
+    font-weight: 600;
+    min-width: 80px;
+  }
+
+  .batch-header .batch-stat {
+    color: var(--static);
+  }
+
+  .batch-header .batch-stat .val {
+    color: var(--chalk);
+  }
+
+  .batch-header .batch-pnl {
+    margin-left: auto;
+    font-weight: 600;
+  }
+
+  .batch-header .batch-pnl.positive { color: var(--signal-up); }
+  .batch-header .batch-pnl.negative { color: var(--signal-down); }
+
+  .batch-header .batch-chevron {
+    color: var(--static);
+    transition: transform 0.2s;
+    font-size: 10px;
+  }
+
+  .batch-header.expanded .batch-chevron {
+    transform: rotate(90deg);
+  }
+
+  .batch-body {
+    display: none;
+    border-top: 1px solid rgba(255,255,255,0.06);
+  }
+
+  .batch-body.open {
+    display: block;
+  }
+
+  .batch-body .log-table {
+    margin: 0;
+  }
+
   .log-table {
     width: 100%;
     border-collapse: collapse;
@@ -1358,8 +1455,13 @@
   <div class="log-header">
     <button class="log-back" id="log-back">&larr; Dashboard</button>
     <span class="log-title">Signal Log</span>
+    <div class="log-view-toggle">
+      <button class="${logViewMode === 'paginated' ? 'active' : ''}" onclick="switchLogView('paginated')">All</button>
+      <button class="${logViewMode === 'batched' ? 'active' : ''}" onclick="switchLogView('batched')">By Batch</button>
+    </div>
   </div>
-  <table class="log-table">
+  <div id="log-batch-view" style="display:none"></div>
+  <table class="log-table" id="log-table">
     <thead>
       <tr>
         <th>Time</th>
@@ -1429,6 +1531,16 @@ function setMode(mode) {
   document.querySelectorAll('.mode-safe-btn').forEach(b => b.classList.toggle('active', mode === 'safe'));
   document.querySelectorAll('.mode-risk-btn').forEach(b => b.classList.toggle('active', mode === 'risk'));
   poll();
+  // If signal log page is visible, re-fetch with new mode
+  const logPageEl = document.getElementById('signal-log-page');
+  if (logPageEl && logPageEl.classList.contains('active')) {
+    logPage = 0;
+    if (logViewMode === 'batched') {
+      loadBatchView();
+    } else {
+      loadLogPage();
+    }
+  }
 }
 
 function setDuration(dur) {
@@ -2145,13 +2257,19 @@ window._spotInterval = setInterval(refreshSpot, 1500);
 // --- Signal Log Page ---
 let logPage = 0;
 const LOG_PAGE_SIZE = 25;
+let logViewMode = 'paginated'; // 'paginated' | 'batched'
+const BATCH_SIZE = 200;
 
 function showSignalLogPage() {
   document.getElementById('app').style.display = 'none';
   document.getElementById('signal-log-page').classList.add('active');
   document.querySelector('.footer').style.display = 'none';
   logPage = 0;
-  loadLogPage();
+  if (logViewMode === 'batched') {
+    loadBatchView();
+  } else {
+    loadLogPage();
+  }
 }
 
 function hideSignalLogPage() {
@@ -2168,7 +2286,32 @@ function switchLogDuration(dur) {
     btn.classList.toggle('active', btn.textContent.trim() === (dur === '15m' ? '15M' : '1H'));
   });
   logPage = 0;
-  loadLogPage();
+  if (logViewMode === 'batched') {
+    loadBatchView();
+  } else {
+    loadLogPage();
+  }
+}
+
+function switchLogView(mode) {
+  logViewMode = mode;
+  // Update toggle buttons
+  const toggles = document.querySelectorAll('.log-view-toggle button');
+  toggles.forEach(btn => {
+    btn.classList.toggle('active', btn.textContent.trim() === (mode === 'paginated' ? 'All' : 'By Batch'));
+  });
+  const batchView = document.getElementById('log-batch-view');
+  const tableView = document.getElementById('log-table');
+  if (mode === 'batched') {
+    batchView.style.display = 'block';
+    tableView.style.display = 'none';
+    loadBatchView();
+  } else {
+    batchView.style.display = 'none';
+    tableView.style.display = '';
+    logPage = 0;
+    loadLogPage();
+  }
 }
 
 async function loadLogPage() {
@@ -2181,6 +2324,108 @@ async function loadLogPage() {
   } catch (e) {
     console.error('Signal log fetch failed:', e);
   }
+}
+
+async function loadBatchView() {
+  const container = document.getElementById('log-batch-view');
+  if (!container) return;
+  try {
+    const resp = await fetch(`${API_BASE}/api/signal-log/batches?duration=${currentDuration}&mode=${currentMode}`, { headers: authHeaders() });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    renderBatchView(data.batches);
+  } catch (e) {
+    console.error('Batch view fetch failed:', e);
+    container.innerHTML = '<div style="color:var(--static);padding:20px;text-align:center;">Failed to load batches</div>';
+  }
+}
+
+function renderBatchView(batches) {
+  const container = document.getElementById('log-batch-view');
+  if (!container) return;
+
+  if (!batches || batches.length === 0) {
+    container.innerHTML = '<div style="color:var(--static);padding:20px;text-align:center;">No signals yet</div>';
+    return;
+  }
+
+  container.innerHTML = batches.map(b => {
+    const pnlClass = b.total_pnl >= 0 ? 'positive' : 'negative';
+    const pnlSign = b.total_pnl >= 0 ? '+' : '';
+    return `
+      <div class="batch-section" id="batch-${b.batch}">
+        <div class="batch-header" onclick="toggleBatch(${b.batch}, ${b.offset}, ${b.count})">
+          <span class="batch-label">Batch ${b.batch}</span>
+          <span class="batch-stat"><span class="val">${b.count}</span> signals</span>
+          <span class="batch-stat"><span class="val">${b.wins}</span>W / <span class="val">${b.losses}</span>L / <span class="val">${b.skips}</span>S</span>
+          <span class="batch-stat"><span class="val">${b.win_rate}%</span> win</span>
+          <span class="batch-pnl ${pnlClass}">${pnlSign}$${b.total_pnl.toFixed(2)} (${pnlSign}${b.roi_pct}%)</span>
+          <span class="batch-chevron">\u25B6</span>
+        </div>
+        <div class="batch-body" id="batch-body-${b.batch}"></div>
+      </div>
+    `;
+  }).join('');
+}
+
+async function toggleBatch(batchNum, offset, count) {
+  const body = document.getElementById(`batch-body-${batchNum}`);
+  const header = body?.previousElementSibling;
+  if (!body) return;
+
+  if (body.classList.contains('open')) {
+    body.classList.remove('open');
+    header?.classList.remove('expanded');
+    return;
+  }
+
+  header?.classList.add('expanded');
+  body.classList.add('open');
+
+  // Load signals for this batch
+  if (body.dataset.loaded) return;
+  try {
+    const resp = await fetch(`${API_BASE}/api/signal-log?offset=${offset}&limit=${count}&duration=${currentDuration}&mode=${currentMode}`, { headers: authHeaders() });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    body.innerHTML = renderBatchTable(data.signals);
+    body.dataset.loaded = 'true';
+  } catch (e) {
+    body.innerHTML = '<div style="color:var(--static);padding:12px;">Failed to load signals</div>';
+  }
+}
+
+function renderBatchTable(signals) {
+  if (!signals || signals.length === 0) return '<div style="color:var(--static);padding:12px;">No signals in this batch</div>';
+  return `<table class="log-table"><thead><tr>
+    <th>Time</th><th>Duration</th><th>Mode</th><th>Signal</th><th>Score</th><th>Edge</th><th>Result</th>
+  </tr></thead><tbody>${signals.map(s => {
+    const dt = new Date(s.market_window_start);
+    const time = dt.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/New_York' });
+    const dur = s.market_duration === '15m' ? '15M' : '1H';
+    const dec = s.final_decision || 'SKIP';
+    const decDisplay = dec === 'BET HIGHER' ? 'BET UP' : dec === 'BET LOWER' ? 'BET DOWN' : 'SKIP';
+    const decCls = dec === 'BET HIGHER' ? 'bet-up' : dec === 'BET LOWER' ? 'bet-down' : 'skip';
+    const modeBadge = s.mode === 'risk'
+      ? '<span class="mode-badge risk">RISK</span>'
+      : '<span class="mode-badge safe">SAFE</span>';
+    let result = '\u2014';
+    if (dec !== 'SKIP' && s.resolved_outcome) {
+      const won = (dec === 'BET HIGHER' && s.resolved_outcome === 'UP') || (dec === 'BET LOWER' && s.resolved_outcome === 'DOWN');
+      result = won
+        ? `<span class="signal-outcome won">W +$${Math.abs(s.simulated_pnl || 0).toFixed(2)}</span>`
+        : `<span class="signal-outcome lost">L $${(s.simulated_pnl || 0).toFixed(2)}</span>`;
+    } else if (dec !== 'SKIP') {
+      result = '<span class="signal-outcome pending">\u23F3</span>';
+    }
+    return `<tr>
+      <td>${time}</td><td>${dur}</td><td>${modeBadge}</td>
+      <td><span class="signal-log-decision ${decCls}">${decDisplay}</span></td>
+      <td>${(s.score > 0 ? '+' : '') + (s.score || 0).toFixed(2)}</td>
+      <td>${(s.edge_pct > 0 ? '+' : '') + (s.edge_pct || 0).toFixed(1)}%</td>
+      <td>${result}</td>
+    </tr>`;
+  }).join('')}</tbody></table>`;
 }
 
 function renderLogTable(signals, total) {

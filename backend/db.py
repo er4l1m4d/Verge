@@ -67,7 +67,9 @@ CREATE TABLE IF NOT EXISTS signals (
     strike_price NUMERIC,
     current_price NUMERIC,
     note TEXT,
-    divergence_signal INTEGER DEFAULT 0
+    divergence_signal INTEGER DEFAULT 0,
+    fear_greed_value NUMERIC,
+    mode TEXT NOT NULL DEFAULT 'safe'
 );
 
 CREATE TABLE IF NOT EXISTS paper_trades (
@@ -84,7 +86,8 @@ CREATE TABLE IF NOT EXISTS paper_trades (
     suggested_price NUMERIC,
     resolved_outcome TEXT,
     simulated_pnl NUMERIC,
-    resolved_at TIMESTAMPTZ
+    resolved_at TIMESTAMPTZ,
+    mode TEXT NOT NULL DEFAULT 'safe'
 );
 
 CREATE TABLE IF NOT EXISTS odds_snapshots (
@@ -458,6 +461,80 @@ def get_paginated_signals(
             sig["simulated_pnl"] = None
 
     return {"signals": signals, "total": total}
+
+
+def get_batch_summaries(client: Client, duration: str | None = None, mode: str | None = None, batch_size: int = 200) -> dict:
+    """Per-batch performance summaries for the signal log.
+
+    Groups signals into batches of `batch_size` and returns summary stats
+    for each batch: count, wins, losses, skips, total P&L, win rate, ROI%.
+
+    Returns {batches: [...], total_batches: N}.
+    """
+    # Fetch all matching signals with their paper_trades
+    query = (
+        client.table("signals")
+        .select(
+            "id, final_decision, market_duration, mode, "
+            "paper_trades!signal_id(resolved_outcome, simulated_pnl, decision)"
+        )
+        .order("id", desc=True)
+    )
+    if duration:
+        query = query.eq("market_duration", duration)
+    if mode:
+        query = query.eq("mode", mode)
+    signals = query.execute().data
+
+    total = len(signals)
+    if total == 0:
+        return {"batches": [], "total_batches": 0}
+
+    batches = []
+    for i in range(0, total, batch_size):
+        chunk = signals[i:i + batch_size]
+        batch_num = (i // batch_size) + 1
+
+        wins = 0
+        losses = 0
+        skips = 0
+        total_pnl = 0.0
+
+        for sig in chunk:
+            decision = sig.get("final_decision") or "SKIP"
+            trades = sig.get("paper_trades", [])
+            if not trades or decision == "SKIP":
+                skips += 1
+                continue
+            trade = trades[0]
+            resolved = trade.get("resolved_outcome")
+            pnl = trade.get("simulated_pnl", 0) or 0
+            if not resolved:
+                skips += 1
+                continue
+            total_pnl += pnl
+            if pnl > 0:
+                wins += 1
+            else:
+                losses += 1
+
+        resolved_count = wins + losses
+        win_rate = round(wins / resolved_count * 100, 1) if resolved_count > 0 else 0
+        roi_pct = round(total_pnl / resolved_count * 100, 1) if resolved_count > 0 else 0
+
+        batches.append({
+            "batch": batch_num,
+            "offset": i,
+            "count": len(chunk),
+            "wins": wins,
+            "losses": losses,
+            "skips": skips,
+            "total_pnl": round(total_pnl, 2),
+            "win_rate": win_rate,
+            "roi_pct": roi_pct,
+        })
+
+    return {"batches": batches, "total_batches": len(batches)}
 
 
 def get_stats(client: Client, duration: str | None = None, mode: str | None = None) -> dict:

@@ -473,5 +473,21 @@ def signal_log():
         return jsonify({"signals": [], "total": 0})
 
 
+@app.route("/api/signal-log/batches")
+@require_secret
+def signal_log_batches():
+    """Batch summaries for the signal log — groups signals into batches of 200."""
+    try:
+        import db
+        duration = request.args.get("duration")
+        mode = request.args.get("mode")
+        client = db.get_client()
+        result = db.get_batch_summaries(client, duration=duration, mode=mode)
+        return jsonify(result)
+    except Exception as e:
+        log.warning(f"Batch summaries query failed: {e}")
+        return jsonify({"batches": [], "total_batches": 0})
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5001, debug=True)
