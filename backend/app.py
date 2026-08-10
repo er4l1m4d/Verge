@@ -552,32 +552,22 @@ def window_observations_recent():
         client = db.get_client()
         result = (
             client.table("window_observations")
-            .select("market_window_start")
+            .select("*")
             .eq("market_duration", duration)
             .order("market_window_start", desc=True)
             .limit(limit * 5)
             .execute()
         )
-        seen = []
+        seen = {}
         for row in result.data:
             ws = row["market_window_start"]
             if ws not in seen:
-                seen.append(ws)
-            if len(seen) >= limit:
-                break
-        windows = []
-        for ws in seen:
-            count_result = (
-                client.table("window_observations")
-                .select("id", count="exact")
-                .eq("market_duration", duration)
-                .eq("market_window_start", ws)
-                .execute()
-            )
-            windows.append({
-                "window_start": ws,
-                "observation_count": count_result.count if hasattr(count_result, "count") else 0,
-            })
+                seen[ws] = 0
+            seen[ws] += 1
+        windows = [
+            {"window_start": ws, "observation_count": cnt}
+            for ws, cnt in list(seen.items())[:limit]
+        ]
         return jsonify(windows)
     except Exception as e:
         log.warning(f"window_observations_recent failed: {e}")
