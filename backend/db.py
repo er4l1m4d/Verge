@@ -466,14 +466,12 @@ def get_performance_summary(client: Client, duration: str | None = None, batch_o
         signals = query.range(batch_offset, batch_offset + batch_count - 1).execute().data
     else:
         # Latest batch: last chunk of up to 200 signals
-        # Compute batch_size so .limit() gets exactly the latest batch
         count_q = client.table("signals").select("id", count="exact").eq("mode", "safe")
         if duration:
             count_q = count_q.eq("market_duration", duration)
         total = count_q.execute().count if hasattr(count_q.execute(), "count") else 0
         batch_count_val = total % 200 if total % 200 != 0 else min(200, total)
-        window_size = batch_count_val if batch_count_val > 0 else 200
-        signals = query.limit(window_size).execute().data
+        signals = query.limit(batch_count_val if batch_count_val > 0 else 200).execute().data
 
     total = len(signals)
     if total == 0:
