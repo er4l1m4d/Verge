@@ -144,6 +144,27 @@ CREATE TABLE IF NOT EXISTS settings (
 
 INSERT INTO settings (key, value) VALUES ('mode', 'paper')
 ON CONFLICT (key) DO NOTHING;
+
+-- Window observations: continuous within-window snapshots (15m only)
+CREATE TABLE IF NOT EXISTS window_observations (
+    id BIGSERIAL PRIMARY KEY,
+    market_duration TEXT NOT NULL,
+    market_window_start BIGINT NOT NULL,
+    seconds_into_window INTEGER NOT NULL,
+    timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    odds NUMERIC,
+    current_price NUMERIC,
+    strike_price NUMERIC,
+    rsi NUMERIC,
+    ma_signal INTEGER,
+    volume_signal INTEGER,
+    divergence_signal INTEGER,
+    fear_greed_value INTEGER,
+    score NUMERIC,
+    hypothetical_decision TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_window_obs_window
+    ON window_observations(market_duration, market_window_start);
 """
 
 
@@ -198,6 +219,24 @@ class PriceSnapshotRow:
     symbol: str
     timestamp_ms: int
     price: float
+
+
+@dataclass
+class WindowObservationRow:
+    """A within-window observation snapshot."""
+    market_duration: str
+    market_window_start: int
+    seconds_into_window: int
+    odds: float | None
+    current_price: float | None
+    strike_price: float | None
+    rsi: float | None
+    ma_signal: int | None
+    volume_signal: int | None
+    divergence_signal: int | None
+    fear_greed_value: int | None
+    score: float | None
+    hypothetical_decision: str | None
 
 
 # --- Write functions ---
@@ -277,6 +316,38 @@ def write_price_snapshot(client: Client, row: PriceSnapshotRow) -> int:
     }
     result = client.table("price_snapshots").insert(data).execute()
     return result.data[0]["id"]
+
+
+def log_window_observation(client: Client, row: WindowObservationRow) -> None:
+    """Log a within-window observation snapshot. Always writes, no idempotency gate."""
+    data = {
+        "market_duration": row.market_duration,
+        "market_window_start": row.market_window_start,
+        "seconds_into_window": row.seconds_into_window,
+        "odds": row.odds,
+        "current_price": row.current_price,
+        "strike_price": row.strike_price,
+        "rsi": row.rsi,
+        "ma_signal": row.ma_signal,
+        "volume_signal": row.volume_signal,
+        "divergence_signal": row.divergence_signal,
+        "fear_greed_value": row.fear_greed_value,
+        "score": row.score,
+        "hypothetical_decision": row.hypothetical_decision,
+    }
+    client.table("window_observations").insert(data).execute()
+
+
+def cleanup_old_observations(client: Client, max_age_days: int = 30) -> None:
+    """Delete window_observations older than max_age_days. Runs once per day."""
+    last = get_setting(client, "last_observation_cleanup")
+    now = int(time.time())
+    if last and (now - int(last)) < 86400:
+        return
+    cutoff_ms = now * 1000 - (max_age_days * 86400 * 1000)
+    client.table("window_observations").delete().lt("market_window_start", cutoff_ms).execute()
+    set_setting(client, "last_observation_cleanup", str(now))
+    log.info(f"Cleaned window_observations older than {max_age_days} days")
 
 
 # --- Query functions ---

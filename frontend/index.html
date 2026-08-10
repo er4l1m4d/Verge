@@ -1312,6 +1312,130 @@
   .modal-resolution.up { background: rgba(51,193,126,0.1); color: var(--signal-up); }
   .modal-resolution.down { background: rgba(226,76,76,0.1); color: var(--signal-down); }
   .modal-resolution.pending { background: rgba(214,165,68,0.1); color: var(--cost-amber); }
+
+  /* --- Timeline Page --- */
+  .timeline-page {
+    display: none;
+  }
+
+  .timeline-page.active {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    background: var(--bg);
+  }
+
+  .timeline-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    margin-bottom: 12px;
+  }
+
+  .timeline-back {
+    background: none;
+    border: 1px solid rgba(255,255,255,0.12);
+    color: var(--chalk);
+    padding: 4px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: var(--font-body);
+    font-size: 12px;
+  }
+
+  .timeline-back:hover {
+    border-color: rgba(255,255,255,0.25);
+  }
+
+  .timeline-title {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--chalk);
+    letter-spacing: 0.5px;
+  }
+
+  .timeline-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+
+  .timeline-controls label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .window-picker {
+    background: var(--panel);
+    border: 1px solid rgba(255,255,255,0.08);
+    color: var(--chalk);
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    cursor: pointer;
+    max-width: 320px;
+  }
+
+  .window-picker:focus {
+    outline: none;
+    border-color: var(--cost-amber);
+  }
+
+  .timeline-chart-wrap {
+    flex: 1;
+    min-height: 260px;
+    position: relative;
+  }
+
+  .timeline-chart-wrap canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  .timeline-legend {
+    display: flex;
+    gap: 8px;
+    padding: 10px 0;
+    border-top: 1px solid rgba(255,255,255,0.06);
+  }
+
+  .timeline-legend button {
+    background: none;
+    border: 1px solid rgba(255,255,255,0.12);
+    color: var(--muted);
+    padding: 4px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    transition: all 0.15s;
+  }
+
+  .timeline-legend button.active {
+    border-color: currentColor;
+  }
+
+  .timeline-legend button[data-series="odds"] { color: var(--cost-amber); }
+  .timeline-legend button[data-series="score"] { color: #00E5FF; }
+  .timeline-legend button[data-series="rsi"] { color: var(--chalk); }
+
+  .timeline-empty {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 12px;
+  }
 </style>
 </head>
 <body>
@@ -1427,6 +1551,36 @@
     <tbody id="log-tbody"></tbody>
   </table>
   <div class="log-pagination" id="log-pagination"></div>
+</div>
+
+<!-- Timeline Page (hidden by default) -->
+<div class="container timeline-page" id="timeline-page">
+  <div class="status-band">
+    <div class="status-wordmark">VERGE</div>
+    <div class="status-right">
+      <div class="status-asset">BTC</div>
+      <div class="status-live">
+        <div class="heartbeat-dot"></div>
+        <span>live</span>
+      </div>
+    </div>
+  </div>
+  <div class="timeline-header">
+    <button class="timeline-back" id="timeline-back">&larr; Dashboard</button>
+    <span class="timeline-title">Window Timeline</span>
+  </div>
+  <div class="timeline-controls">
+    <label>Window:</label>
+    <select class="window-picker" id="window-picker" onchange="loadTimeline()"></select>
+  </div>
+  <div class="timeline-chart-wrap" id="timeline-chart-wrap">
+    <canvas id="timeline-chart"></canvas>
+  </div>
+  <div class="timeline-legend">
+    <button class="active" data-series="odds" onclick="toggleTimelineSeries('odds', this)">Odds</button>
+    <button class="active" data-series="score" onclick="toggleTimelineSeries('score', this)">Score</button>
+    <button class="active" data-series="rsi" onclick="toggleTimelineSeries('rsi', this)">RSI</button>
+  </div>
 </div>
 
 <!-- Signal Detail Modal (hidden by default) -->
@@ -1885,6 +2039,7 @@ function renderDashboard(signal, stats, performance) {
           <span class="freeze-lock" data-duration="1h" onclick="toggleFreeze('1h')" title="Freeze 1H">${frozenDurations.has('1h') ? '\uD83D\uDD12' : '\uD83D\uDD13'}</span>
           <button id="dur-15m" onclick="setDuration('15m')">15M</button>
         </div>
+        <button class="timeline-btn" id="timeline-btn" onclick="showTimelinePage()" title="Window Timeline" style="background:none;border:1px solid rgba(255,255,255,0.12);color:var(--muted);padding:4px 10px;border-radius:4px;cursor:pointer;font-family:var(--font-mono);font-size:11px;letter-spacing:0.5px;">Timeline</button>
         <div id="fear-greed-badge" class="status-badge" style="display:none">F&G: <span id="fear-greed-value">—</span></div>
         <div class="status-live">
           <div class="heartbeat-dot" id="heartbeat-dot"></div>
@@ -2557,9 +2712,182 @@ function closeSignalModal() {
   document.getElementById('signal-modal').style.display = 'none';
 }
 
+// --- Timeline Page ---
+let timelineSeries = { odds: true, score: true, rsi: true };
+let timelineData = [];
+
+function showTimelinePage() {
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('signal-log-page').classList.remove('active');
+  document.getElementById('timeline-page').classList.add('active');
+  document.querySelector('.footer').style.display = 'none';
+  loadRecentWindows();
+}
+
+function hideTimelinePage() {
+  document.getElementById('app').style.display = '';
+  document.getElementById('timeline-page').classList.remove('active');
+  document.querySelector('.footer').style.display = '';
+}
+
+async function loadRecentWindows() {
+  try {
+    const resp = await fetch(`${API_BASE}/api/window-observations/recent?duration=15m&limit=20`, { headers: authHeaders() });
+    const windows = await resp.json();
+    const picker = document.getElementById('window-picker');
+    if (!picker) return;
+    if (windows.length === 0) {
+      picker.innerHTML = '<option>No windows with data yet</option>';
+      return;
+    }
+    picker.innerHTML = windows.map(w => {
+      const dt = new Date(w.window_start);
+      const label = dt.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York' });
+      return `<option value="${w.window_start}">${label} ET (${w.observation_count} pts)</option>`;
+    }).join('');
+    loadTimeline();
+  } catch (e) {
+    console.error('Failed to load recent windows:', e);
+  }
+}
+
+async function loadTimeline() {
+  const picker = document.getElementById('window-picker');
+  if (!picker || !picker.value) return;
+  try {
+    const resp = await fetch(`${API_BASE}/api/window-observations?duration=15m&window_start=${picker.value}`, { headers: authHeaders() });
+    timelineData = await resp.json();
+    drawTimeline();
+  } catch (e) {
+    console.error('Failed to load timeline:', e);
+  }
+}
+
+function toggleTimelineSeries(series, btn) {
+  timelineSeries[series] = !timelineSeries[series];
+  btn.classList.toggle('active', timelineSeries[series]);
+  drawTimeline();
+}
+
+function drawTimeline() {
+  const canvas = document.getElementById('timeline-chart');
+  if (!canvas || timelineData.length === 0) return;
+
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const wrap = document.getElementById('timeline-chart-wrap');
+  const rect = wrap.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.scale(dpr, dpr);
+
+  const W = rect.width;
+  const H = rect.height;
+  const pad = { top: 16, right: 50, bottom: 30, left: 50 };
+  const chartW = W - pad.left - pad.right;
+  const chartH = H - pad.top - pad.bottom;
+
+  ctx.clearRect(0, 0, W, H);
+
+  if (timelineData.length === 0) {
+    ctx.fillStyle = '#666';
+    ctx.font = '12px "Geist Mono", monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('No observations for this window', W / 2, H / 2);
+    return;
+  }
+
+  const maxSec = Math.max(...timelineData.map(d => d.seconds_into_window), 900);
+
+  // Collect visible series data
+  const series = [];
+  if (timelineSeries.odds) series.push({ key: 'odds', color: '#D6A544', min: 0, max: 1, label: 'Odds' });
+  if (timelineSeries.score) series.push({ key: 'score', color: '#00E5FF', min: -1, max: 1, label: 'Score' });
+  if (timelineSeries.rsi) series.push({ key: 'rsi', color: '#E7E9EC', min: 0, max: 100, label: 'RSI' });
+
+  if (series.length === 0) {
+    ctx.fillStyle = '#666';
+    ctx.font = '12px "Geist Mono", monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('Toggle a series to view', W / 2, H / 2);
+    return;
+  }
+
+  function toX(sec) { return pad.left + (sec / maxSec) * chartW; }
+
+  // Draw each series
+  series.forEach(s => {
+    const vals = timelineData.map(d => d[s.key]).filter(v => v != null);
+    if (vals.length === 0) return;
+
+    const dataMin = Math.min(...vals);
+    const dataMax = Math.max(...vals);
+    const range = dataMax - dataMin || 1;
+    const yPad = range * 0.1;
+    const yMin = dataMin - yPad;
+    const yMax = dataMax + yPad;
+    function toY(v) { return pad.top + chartH - ((v - yMin) / (yMax - yMin)) * chartH; }
+
+    // Line
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth = 1.5;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    let started = false;
+    timelineData.forEach(d => {
+      const v = d[s.key];
+      if (v == null) return;
+      const x = toX(d.seconds_into_window);
+      const y = toY(v);
+      if (!started) { ctx.moveTo(x, y); started = true; }
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    // Right-axis label
+    const lastVal = vals[vals.length - 1];
+    const lastSec = timelineData.filter(d => d[s.key] != null).pop()?.seconds_into_window || 0;
+    ctx.fillStyle = s.color;
+    ctx.font = '9px "Geist Mono", monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(lastVal.toFixed(2), toX(lastSec) + 4, toY(lastVal) + 3);
+  });
+
+  // X-axis labels (minutes)
+  ctx.fillStyle = '#666';
+  ctx.font = '9px "Geist Mono", monospace';
+  ctx.textAlign = 'center';
+  for (let m = 0; m <= 15; m += 5) {
+    const sec = m * 60;
+    const x = toX(sec);
+    ctx.fillText(`${m}m`, x, H - pad.bottom + 14);
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, pad.top);
+    ctx.lineTo(x, pad.top + chartH);
+    ctx.stroke();
+  }
+
+  // Signal capture marker at t=0
+  ctx.strokeStyle = 'rgba(51,193,126,0.5)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 3]);
+  ctx.beginPath();
+  ctx.moveTo(toX(0), pad.top);
+  ctx.lineTo(toX(0), pad.top + chartH);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = 'rgba(51,193,126,0.7)';
+  ctx.font = '9px "Geist Mono", monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('Signal', toX(0) + 4, pad.top + 10);
+}
+
 // Event listeners
 document.getElementById('log-back')?.addEventListener('click', hideSignalLogPage);
 document.getElementById('view-all-link')?.addEventListener('click', showSignalLogPage);
+document.getElementById('timeline-back')?.addEventListener('click', hideTimelinePage);
 document.getElementById('signal-modal')?.addEventListener('click', (e) => {
   if (e.target.id === 'signal-modal') closeSignalModal();
 });

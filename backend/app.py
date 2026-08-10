@@ -294,6 +294,12 @@ def heartbeat():
         client = db.get_client()
         frozen = db.get_frozen_durations(client)
 
+        # Daily observation cleanup (once per day)
+        try:
+            db.cleanup_old_observations(client, max_age_days=30)
+        except Exception as e:
+            log.warning(f"Observation cleanup failed (non-fatal): {e}")
+
         results = []
         for dur in supported_durations():
             try:
@@ -309,6 +315,27 @@ def heartbeat():
 
                 # Generate signal
                 sig = generate_signal(duration=dur)
+
+                # Log window observation (always, no idempotency gate)
+                try:
+                    obs = db.WindowObservationRow(
+                        market_duration=sig.duration,
+                        market_window_start=sig.hour_open_time or 0,
+                        seconds_into_window=max(0, int(time.time() * 1000 - (sig.hour_open_time or 0)) // 1000),
+                        odds=sig.odds,
+                        current_price=sig.current_price,
+                        strike_price=sig.strike_price,
+                        rsi=sig.rsi,
+                        ma_signal=sig.ma_signal,
+                        volume_signal=sig.volume_signal,
+                        divergence_signal=sig.divergence_signal,
+                        fear_greed_value=sig.fear_greed_value,
+                        score=sig.score,
+                        hypothetical_decision=sig.final_decision,
+                    )
+                    db.log_window_observation(client, obs)
+                except Exception as e:
+                    log.warning(f"Observation log failed for {dur} (non-fatal): {e}")
 
                 # Persist signal
                 try:
@@ -490,6 +517,64 @@ def get_frozen():
         return jsonify({"frozen": sorted(frozen)})
     except Exception as e:
         return jsonify({"frozen": []})
+
+
+@app.route("/api/window-observations")
+@require_secret
+def window_observations():
+    """Return observation timeline for a window."""
+    duration = request.args.get("duration", "15m")
+    window_start = request.args.get("window_start", type=int)
+    client = db.get_client()
+    query = client.table("window_observations").select("*").eq("market_duration", duration)
+    if window_start:
+        query = query.eq("market_window_start", window_start)
+    else:
+        latest = query.order("market_window_start", desc=True).limit(1).execute()
+        if latest.data:
+            window_start = latest.data[0]["market_window_start"]
+            query = query.eq("market_window_start", window_start)
+    result = query.order("seconds_into_window").execute()
+    return jsonify(result.data)
+
+
+@app.route("/api/window-observations/recent")
+@require_secret
+def window_observations_recent():
+    """List recent windows with observation data."""
+    duration = request.args.get("duration", "15m")
+    limit = request.args.get("limit", 10, type=int)
+    client = db.get_client()
+    result = (
+        client.table("window_observations")
+        .select("market_window_start")
+        .eq("market_duration", duration)
+        .order("market_window_start", desc=True)
+        .limit(limit * 5)  # over-fetch for distinct
+        .execute()
+    )
+    seen = []
+    for row in result.data:
+        ws = row["market_window_start"]
+        if ws not in seen:
+            seen.append(ws)
+        if len(seen) >= limit:
+            break
+    # Get counts per window
+    windows = []
+    for ws in seen:
+        count_result = (
+            client.table("window_observations")
+            .select("id", count="exact")
+            .eq("market_duration", duration)
+            .eq("market_window_start", ws)
+            .execute()
+        )
+        windows.append({
+            "window_start": ws,
+            "observation_count": count_result.count if hasattr(count_result, "count") else 0,
+        })
+    return jsonify(windows)
 
 
 if __name__ == "__main__":
