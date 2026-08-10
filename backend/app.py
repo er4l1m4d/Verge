@@ -527,16 +527,14 @@ def window_observations():
         duration = request.args.get("duration", "15m")
         window_start = request.args.get("window_start", type=int)
         client = db.get_client()
-        query = client.table("window_observations").select("*").eq("market_duration", duration)
+        query = client.table("window_observations").select("*")
         if window_start:
             query = query.eq("market_window_start", window_start)
-        else:
-            latest = client.table("window_observations").select("market_window_start").eq("market_duration", duration).order("market_window_start", desc=True).limit(1).execute()
-            if latest.data:
-                window_start = latest.data[0]["market_window_start"]
-                query = query.eq("market_window_start", window_start)
         result = query.order("seconds_into_window").execute()
-        return jsonify(result.data)
+        # Filter by duration in Python
+        data = [r for r in result.data if r.get("market_duration") == duration]
+        log.info(f"window_observations: duration={duration} window_start={window_start} raw={len(result.data)} filtered={len(data)}")
+        return jsonify(data)
     except Exception as e:
         log.warning(f"window_observations failed: {e}")
         return jsonify([])
@@ -553,13 +551,14 @@ def window_observations_recent():
         result = (
             client.table("window_observations")
             .select("*")
-            .eq("market_duration", duration)
             .order("market_window_start", desc=True)
-            .limit(limit * 5)
+            .limit(50)
             .execute()
         )
+        # Filter by duration in Python to avoid Supabase client filtering issues
+        rows = [r for r in result.data if r.get("market_duration") == duration]
         seen = {}
-        for row in result.data:
+        for row in rows:
             ws = row["market_window_start"]
             if ws not in seen:
                 seen[ws] = 0
@@ -568,10 +567,11 @@ def window_observations_recent():
             {"window_start": ws, "observation_count": cnt}
             for ws, cnt in list(seen.items())[:limit]
         ]
+        log.info(f"window_observations_recent: duration={duration} raw={len(result.data)} filtered={len(rows)} windows={len(windows)}")
         return jsonify(windows)
     except Exception as e:
         log.warning(f"window_observations_recent failed: {e}")
-        return jsonify([])
+        return jsonify({"error": str(e)})
 
 
 if __name__ == "__main__":
