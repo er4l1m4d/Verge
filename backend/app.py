@@ -523,58 +523,65 @@ def get_frozen():
 @require_secret
 def window_observations():
     """Return observation timeline for a window."""
-    duration = request.args.get("duration", "15m")
-    window_start = request.args.get("window_start", type=int)
-    client = db.get_client()
-    query = client.table("window_observations").select("*").eq("market_duration", duration)
-    if window_start:
-        query = query.eq("market_window_start", window_start)
-    else:
-        latest = query.order("market_window_start", desc=True).limit(1).execute()
-        if latest.data:
-            window_start = latest.data[0]["market_window_start"]
+    try:
+        duration = request.args.get("duration", "15m")
+        window_start = request.args.get("window_start", type=int)
+        client = db.get_client()
+        query = client.table("window_observations").select("*").eq("market_duration", duration)
+        if window_start:
             query = query.eq("market_window_start", window_start)
-    result = query.order("seconds_into_window").execute()
-    return jsonify(result.data)
+        else:
+            latest = client.table("window_observations").select("market_window_start").eq("market_duration", duration).order("market_window_start", desc=True).limit(1).execute()
+            if latest.data:
+                window_start = latest.data[0]["market_window_start"]
+                query = query.eq("market_window_start", window_start)
+        result = query.order("seconds_into_window").execute()
+        return jsonify(result.data)
+    except Exception as e:
+        log.warning(f"window_observations failed: {e}")
+        return jsonify([])
 
 
 @app.route("/api/window-observations/recent")
 @require_secret
 def window_observations_recent():
     """List recent windows with observation data."""
-    duration = request.args.get("duration", "15m")
-    limit = request.args.get("limit", 10, type=int)
-    client = db.get_client()
-    result = (
-        client.table("window_observations")
-        .select("market_window_start")
-        .eq("market_duration", duration)
-        .order("market_window_start", desc=True)
-        .limit(limit * 5)  # over-fetch for distinct
-        .execute()
-    )
-    seen = []
-    for row in result.data:
-        ws = row["market_window_start"]
-        if ws not in seen:
-            seen.append(ws)
-        if len(seen) >= limit:
-            break
-    # Get counts per window
-    windows = []
-    for ws in seen:
-        count_result = (
+    try:
+        duration = request.args.get("duration", "15m")
+        limit = request.args.get("limit", 10, type=int)
+        client = db.get_client()
+        result = (
             client.table("window_observations")
-            .select("id", count="exact")
+            .select("market_window_start")
             .eq("market_duration", duration)
-            .eq("market_window_start", ws)
+            .order("market_window_start", desc=True)
+            .limit(limit * 5)
             .execute()
         )
-        windows.append({
-            "window_start": ws,
-            "observation_count": count_result.count if hasattr(count_result, "count") else 0,
-        })
-    return jsonify(windows)
+        seen = []
+        for row in result.data:
+            ws = row["market_window_start"]
+            if ws not in seen:
+                seen.append(ws)
+            if len(seen) >= limit:
+                break
+        windows = []
+        for ws in seen:
+            count_result = (
+                client.table("window_observations")
+                .select("id", count="exact")
+                .eq("market_duration", duration)
+                .eq("market_window_start", ws)
+                .execute()
+            )
+            windows.append({
+                "window_start": ws,
+                "observation_count": count_result.count if hasattr(count_result, "count") else 0,
+            })
+        return jsonify(windows)
+    except Exception as e:
+        log.warning(f"window_observations_recent failed: {e}")
+        return jsonify([])
 
 
 if __name__ == "__main__":
