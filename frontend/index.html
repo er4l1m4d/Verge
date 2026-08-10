@@ -566,6 +566,41 @@
   .perf-value.positive { color: var(--signal-up); }
   .perf-value.negative { color: var(--signal-down); }
 
+  .log-perf-bar {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1px;
+    background: rgba(255,255,255,0.06);
+    border-radius: 6px;
+    overflow: hidden;
+    margin-bottom: 12px;
+  }
+
+  .log-perf-bar .perf-block {
+    background: var(--panel);
+    padding: 10px 16px;
+    text-align: center;
+  }
+
+  .log-perf-bar .perf-label {
+    font-size: 9px;
+    color: var(--static);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 2px;
+  }
+
+  .log-perf-bar .perf-value {
+    font-family: var(--font-mono);
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--chalk);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .log-perf-bar .perf-value.positive { color: var(--signal-up); }
+  .log-perf-bar .perf-value.negative { color: var(--signal-down); }
+
   .resolved-trades {
     border-bottom: 1px solid rgba(255,255,255,0.06);
   }
@@ -1535,6 +1570,20 @@
       <button class="${logViewMode === 'batched' ? 'active' : ''}" onclick="switchLogView('batched')">By Batch</button>
     </div>
   </div>
+  <div class="log-perf-bar" id="log-perf-bar" style="display:none">
+    <div class="perf-block">
+      <div class="perf-label">Signals</div>
+      <div class="perf-value" id="log-perf-signals">&mdash;</div>
+    </div>
+    <div class="perf-block">
+      <div class="perf-label">Profitable</div>
+      <div class="perf-value" id="log-perf-profitable">&mdash;</div>
+    </div>
+    <div class="perf-block">
+      <div class="perf-label">ROI</div>
+      <div class="perf-value" id="log-perf-roi">&mdash;</div>
+    </div>
+  </div>
   <div id="log-batch-view" style="display:none"></div>
   <table class="log-table" id="log-table">
     <thead>
@@ -2438,13 +2487,16 @@ function switchLogView(mode) {
   });
   const batchView = document.getElementById('log-batch-view');
   const tableView = document.getElementById('log-table');
+  const perfBar = document.getElementById('log-perf-bar');
   if (mode === 'batched') {
     batchView.style.display = 'block';
     tableView.style.display = 'none';
+    perfBar.style.display = 'grid';
     loadBatchView();
   } else {
     batchView.style.display = 'none';
     tableView.style.display = '';
+    perfBar.style.display = 'none';
     logPage = 0;
     loadLogPage();
   }
@@ -2519,15 +2571,40 @@ async function toggleBatch(batchNum, offset, count) {
   body.classList.add('open');
 
   // Load signals for this batch
-  if (body.dataset.loaded) return;
+  if (!body.dataset.loaded) {
+    try {
+      const resp = await fetch(`${API_BASE}/api/signal-log?offset=${offset}&limit=${count}&duration=${currentDuration}&duration=${currentDuration}`, { headers: authHeaders() });
+      if (resp.ok) {
+        const data = await resp.json();
+        body.innerHTML = renderBatchTable(data.signals);
+        body.dataset.loaded = 'true';
+      }
+    } catch (e) {
+      body.innerHTML = '<div style="color:var(--static);padding:12px;">Failed to load signals</div>';
+    }
+  }
+
+  // Update batch performance bar
+  fetchBatchPerformance(offset, count);
+}
+
+async function fetchBatchPerformance(offset, count) {
   try {
-    const resp = await fetch(`${API_BASE}/api/signal-log?offset=${offset}&limit=${count}&duration=${currentDuration}&duration=${currentDuration}`, { headers: authHeaders() });
+    const resp = await fetch(`${API_BASE}/api/performance?duration=${currentDuration}&duration=${currentDuration}&batch_offset=${offset}&batch_count=${count}`, { headers: authHeaders() });
     if (!resp.ok) return;
     const data = await resp.json();
-    body.innerHTML = renderBatchTable(data.signals);
-    body.dataset.loaded = 'true';
+    const sigEl = document.getElementById('log-perf-signals');
+    const profEl = document.getElementById('log-perf-profitable');
+    const roiEl = document.getElementById('log-perf-roi');
+    if (sigEl) sigEl.textContent = `${data.total_signals || 0} / ${data.window || count}`;
+    if (profEl) profEl.textContent = `${data.profitable || 0} / ${data.resolved || 0}`;
+    if (roiEl) {
+      const roi = data.roi_pct || 0;
+      roiEl.textContent = `${roi >= 0 ? '+' : ''}${roi.toFixed(1)}%`;
+      roiEl.className = `perf-value ${roi >= 0 ? 'positive' : 'negative'}`;
+    }
   } catch (e) {
-    body.innerHTML = '<div style="color:var(--static);padding:12px;">Failed to load signals</div>';
+    console.error('Batch performance fetch failed:', e);
   }
 }
 

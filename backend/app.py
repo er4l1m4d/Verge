@@ -443,12 +443,17 @@ def weekly_digest():
 @app.route("/api/performance")
 @require_secret
 def performance():
-    """Rolling performance summary over last 200 signals."""
+    """Rolling performance summary over last 200 signals, or a specific batch."""
     try:
         import db
         duration = request.args.get("duration")
+        batch_offset = request.args.get("batch_offset", type=int)
+        batch_count = request.args.get("batch_count", type=int)
         client = db.get_client()
-        result = db.get_performance_summary(client, duration=duration)
+        result = db.get_performance_summary(
+            client, duration=duration,
+            batch_offset=batch_offset, batch_count=batch_count,
+        )
         return jsonify(result)
     except Exception as e:
         log.warning(f"Performance query failed: {e}")

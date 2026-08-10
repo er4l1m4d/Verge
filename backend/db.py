@@ -437,8 +437,12 @@ def get_recent_signals(client: Client, limit: int = 10, duration: str | None = N
     return signals
 
 
-def get_performance_summary(client: Client, duration: str | None = None) -> dict:
-    """Rolling performance over last 200 signals.
+def get_performance_summary(client: Client, duration: str | None = None, batch_offset: int | None = None, batch_count: int | None = None) -> dict:
+    """Rolling performance over signals.
+
+    When batch_offset and batch_count are provided, computes stats for that
+    specific slice (e.g. batch 2 = offset 200, count 200).
+    Otherwise defaults to last 200 signals.
 
     Uses PostgREST embedded resource query to avoid N+1 per-signal round-trips.
     Returns total signals in window, profitable count, cumulative ROI%,
@@ -455,11 +459,17 @@ def get_performance_summary(client: Client, duration: str | None = None) -> dict
     )
     if duration:
         query = query.eq("market_duration", duration)
-    signals = query.limit(200).execute().data
+
+    window_size = 200
+    if batch_offset is not None and batch_count is not None:
+        window_size = batch_count
+        signals = query.range(batch_offset, batch_offset + batch_count - 1).execute().data
+    else:
+        signals = query.limit(200).execute().data
 
     total = len(signals)
     if total == 0:
-        return {"total_signals": 0, "window": 200, "profitable": 0, "resolved": 0, "roi_pct": 0.0, "recent_resolved": []}
+        return {"total_signals": 0, "window": window_size, "profitable": 0, "resolved": 0, "roi_pct": 0.0, "recent_resolved": []}
 
     profitable = 0
     total_pnl = 0.0
@@ -492,7 +502,7 @@ def get_performance_summary(client: Client, duration: str | None = None) -> dict
 
     return {
         "total_signals": total,
-        "window": 200,
+        "window": window_size,
         "profitable": profitable,
         "resolved": resolved_count,
         "roi_pct": round(roi_pct, 1),
