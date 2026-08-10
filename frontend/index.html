@@ -2402,6 +2402,11 @@ window._pollInterval = setInterval(poll, 30000);
 window._chartInterval = setInterval(refreshChart, 5000);
 window._spotInterval = setInterval(refreshSpot, 1500);
 
+// --- Loading helper ---
+function loadingHTML(msg) {
+  return `<div style="display:flex;align-items:center;justify-content:center;padding:24px;color:var(--static);font-family:var(--font-mono);font-size:12px;letter-spacing:0.5px;">${msg}<span class="loading-dots"><span>.</span><span>.</span><span>.</span></span></div>`;
+}
+
 // --- Signal Log Page ---
 let logPage = 0;
 const LOG_PAGE_SIZE = 25;
@@ -2464,6 +2469,8 @@ function switchLogView(mode) {
 
 async function loadLogPage() {
   const offset = logPage * LOG_PAGE_SIZE;
+  const tbody = document.getElementById('log-tbody');
+  if (tbody) tbody.innerHTML = `<tr><td colspan="7">${loadingHTML('Loading signals')}</td></tr>`;
   try {
     const resp = await fetch(`${API_BASE}/api/signal-log?offset=${offset}&limit=${LOG_PAGE_SIZE}&duration=${currentDuration}&duration=${currentDuration}`, { headers: authHeaders() });
     if (!resp.ok) return;
@@ -2471,12 +2478,14 @@ async function loadLogPage() {
     renderLogTable(data.signals, data.total);
   } catch (e) {
     console.error('Signal log fetch failed:', e);
+    if (tbody) tbody.innerHTML = `<tr><td colspan="7" style="color:var(--static);text-align:center;padding:20px;">Failed to load</td></tr>`;
   }
 }
 
 async function loadBatchView() {
   const container = document.getElementById('log-batch-view');
   if (!container) return;
+  container.innerHTML = loadingHTML('Loading batches');
   try {
     const resp = await fetch(`${API_BASE}/api/signal-log/batches?duration=${currentDuration}&duration=${currentDuration}`, { headers: authHeaders() });
     if (!resp.ok) return;
@@ -2532,6 +2541,7 @@ async function toggleBatch(batchNum, offset, count) {
 
   // Load signals for this batch
   if (!body.dataset.loaded) {
+    body.innerHTML = loadingHTML('Loading signals');
     try {
       const resp = await fetch(`${API_BASE}/api/signal-log?offset=${offset}&limit=${count}&duration=${currentDuration}&duration=${currentDuration}`, { headers: authHeaders() });
       if (resp.ok) {
@@ -2623,6 +2633,10 @@ function renderLogTable(signals, total) {
 }
 
 async function openSignalModal(signalId) {
+  const modal = document.getElementById('signal-modal');
+  const content = document.getElementById('modal-content');
+  if (content) content.innerHTML = loadingHTML('Loading signal');
+  modal.style.display = 'flex';
   try {
     const resp = await fetch(`${API_BASE}/api/signal-log?offset=0&limit=1000&duration=${currentDuration}&duration=${currentDuration}`, { headers: authHeaders() });
     if (!resp.ok) return;
@@ -2745,6 +2759,19 @@ function hideTimelinePage() {
 }
 
 async function loadRecentWindows() {
+  const wrap = document.getElementById('timeline-chart-wrap');
+  if (wrap) {
+    const ctx = wrap.querySelector('canvas');
+    if (ctx) ctx.style.display = 'none';
+    let loader = document.getElementById('timeline-loader');
+    if (!loader) {
+      loader = document.createElement('div');
+      loader.id = 'timeline-loader';
+      wrap.appendChild(loader);
+    }
+    loader.innerHTML = loadingHTML('Loading timeline');
+    loader.style.display = 'flex';
+  }
   try {
     const resp = await fetch(`${API_BASE}/api/window-observations/recent?duration=15m&limit=20`, { headers: authHeaders() });
     const windows = await resp.json();
@@ -2771,6 +2798,10 @@ async function loadTimeline() {
   try {
     const resp = await fetch(`${API_BASE}/api/window-observations?duration=15m&window_start=${picker.value}`, { headers: authHeaders() });
     timelineData = await resp.json();
+    const loader = document.getElementById('timeline-loader');
+    if (loader) loader.style.display = 'none';
+    const canvas = document.getElementById('timeline-chart');
+    if (canvas) canvas.style.display = '';
     drawTimeline();
   } catch (e) {
     console.error('Failed to load timeline:', e);
