@@ -558,12 +558,16 @@ def get_paginated_signals(
 def get_batch_summaries(client: Client, duration: str | None = None, batch_size: int = 200) -> dict:
     """Per-batch performance summaries for the signal log.
 
-    Groups signals into batches of `batch_size` and returns summary stats
-    for each batch: count, wins, losses, skips, total P&L, win rate, ROI%.
+    Groups signals into batches of `batch_size`, ordered chronologically
+    (Batch 1 = oldest, Batch N = newest). Returns summary stats for each
+    batch: count, wins, losses, skips, total P&L, win rate, ROI%.
+
+    Offsets are computed for the id-desc ordering used by get_paginated_signals(),
+    so toggleBatch() can fetch the correct page.
 
     Returns {batches: [...], total_batches: N}.
     """
-    # Fetch all matching signals with their paper_trades
+    # Fetch all matching signals with their paper_trades (oldest first)
     query = (
         client.table("signals")
         .select(
@@ -571,7 +575,7 @@ def get_batch_summaries(client: Client, duration: str | None = None, batch_size:
             "paper_trades!signal_id(resolved_outcome, simulated_pnl, decision)"
         )
         .eq("mode", "safe")
-        .order("id", desc=True)
+        .order("id", desc=False)
     )
     if duration:
         query = query.eq("market_duration", duration)
@@ -582,9 +586,14 @@ def get_batch_summaries(client: Client, duration: str | None = None, batch_size:
         return {"batches": [], "total_batches": 0}
 
     batches = []
+    num_batches = (total + batch_size - 1) // batch_size
     for i in range(0, total, batch_size):
         chunk = signals[i:i + batch_size]
         batch_num = (i // batch_size) + 1
+
+        # Compute offset for id-desc ordering (used by get_paginated_signals)
+        # Batch at position i (asc) maps to offset (total - (i + len(chunk))) in desc
+        desc_offset = total - i - len(chunk)
 
         wins = 0
         losses = 0
@@ -615,7 +624,8 @@ def get_batch_summaries(client: Client, duration: str | None = None, batch_size:
 
         batches.append({
             "batch": batch_num,
-            "offset": i,
+            "total_batches": num_batches,
+            "offset": desc_offset,
             "count": len(chunk),
             "wins": wins,
             "losses": losses,
