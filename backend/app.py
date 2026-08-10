@@ -524,17 +524,20 @@ def get_frozen():
 def window_observations():
     """Return observation timeline for a window."""
     try:
+        import db
         duration = request.args.get("duration", "15m")
         window_start = request.args.get("window_start", type=int)
         client = db.get_client()
-        query = client.table("window_observations").select("*")
+        query = client.table("window_observations").select("*").eq("market_duration", duration)
         if window_start:
             query = query.eq("market_window_start", window_start)
+        else:
+            latest = client.table("window_observations").select("market_window_start").eq("market_duration", duration).order("market_window_start", desc=True).limit(1).execute()
+            if latest.data:
+                window_start = latest.data[0]["market_window_start"]
+                query = client.table("window_observations").select("*").eq("market_duration", duration).eq("market_window_start", window_start)
         result = query.order("seconds_into_window").execute()
-        # Filter by duration in Python
-        data = [r for r in result.data if r.get("market_duration") == duration]
-        log.info(f"window_observations: duration={duration} window_start={window_start} raw={len(result.data)} filtered={len(data)}")
-        return jsonify(data)
+        return jsonify(result.data)
     except Exception as e:
         log.warning(f"window_observations failed: {e}")
         return jsonify([])
@@ -545,20 +548,20 @@ def window_observations():
 def window_observations_recent():
     """List recent windows with observation data."""
     try:
+        import db
         duration = request.args.get("duration", "15m")
         limit = request.args.get("limit", 10, type=int)
         client = db.get_client()
         result = (
             client.table("window_observations")
             .select("*")
+            .eq("market_duration", duration)
             .order("market_window_start", desc=True)
-            .limit(50)
+            .limit(limit * 5)
             .execute()
         )
-        # Filter by duration in Python to avoid Supabase client filtering issues
-        rows = [r for r in result.data if r.get("market_duration") == duration]
         seen = {}
-        for row in rows:
+        for row in result.data:
             ws = row["market_window_start"]
             if ws not in seen:
                 seen[ws] = 0
@@ -567,11 +570,10 @@ def window_observations_recent():
             {"window_start": ws, "observation_count": cnt}
             for ws, cnt in list(seen.items())[:limit]
         ]
-        log.info(f"window_observations_recent: duration={duration} raw={len(result.data)} filtered={len(rows)} windows={len(windows)}")
         return jsonify(windows)
     except Exception as e:
         log.warning(f"window_observations_recent failed: {e}")
-        return jsonify({"error": str(e)})
+        return jsonify([])
 
 
 if __name__ == "__main__":
