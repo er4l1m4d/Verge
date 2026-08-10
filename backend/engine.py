@@ -623,11 +623,12 @@ def persist_signal(sig: LiveSignal) -> None:
 
     client = db.get_client()
     window = sig.hour_open_time or int(time.time() * 1000) - 3_600_000
+    mode = "safe"
 
     # Check idempotency: don't duplicate signals for same window + duration + mode
-    existing = db.get_existing_signal(client, window, duration=sig.duration, mode=sig.mode)
+    existing = db.get_existing_signal(client, window, duration=sig.duration, mode=mode)
     if existing:
-        log.info(f"Signal already exists for window {window} duration={sig.duration} mode={sig.mode}, skipping write")
+        log.info(f"Signal already exists for window {window} duration={sig.duration}, skipping write")
         return
 
     # Write signal (always)
@@ -653,7 +654,7 @@ def persist_signal(sig: LiveSignal) -> None:
         note=sig.note,
         divergence_signal=sig.divergence_signal,
         fear_greed_value=sig.fear_greed_value,
-        mode=sig.mode,
+        mode=mode,
     ))
 
     # Write paper trade (only if not SKIP)
@@ -668,7 +669,7 @@ def persist_signal(sig: LiveSignal) -> None:
             score=sig.score,
             edge_pct=sig.edge_pct,
             suggested_price=sig.suggested_price,
-            mode=sig.mode,
+            mode=mode,
         ))
 
     # Write odds snapshot (every heartbeat tick)
