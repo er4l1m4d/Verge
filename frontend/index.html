@@ -519,6 +519,17 @@
     border-bottom: 1px solid rgba(255,255,255,0.06);
   }
 
+  .perf-header {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--static);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    padding: 6px 20px;
+    background: var(--void);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+
   .perf-block {
     background: var(--void);
     padding: 14px 20px;
@@ -2133,6 +2144,7 @@ function renderDashboard(signal, stats, performance) {
     </div>
 
     <!-- Performance Bar -->
+    <div class="perf-header" id="perf-header">Batch ${performance?.batch || '—'} — Latest</div>
     <div class="performance-bar">
       <div class="perf-block">
         <div class="perf-label">Signals</div>

@@ -461,6 +461,8 @@ def get_performance_summary(client: Client, duration: str | None = None, batch_o
         query = query.eq("market_duration", duration)
 
     window_size = 200
+    batch_num = None
+    total_signals = 0
     if batch_offset is not None and batch_count is not None:
         window_size = batch_count
         signals = query.range(batch_offset, batch_offset + batch_count - 1).execute().data
@@ -469,13 +471,15 @@ def get_performance_summary(client: Client, duration: str | None = None, batch_o
         count_q = client.table("signals").select("id", count="exact").eq("mode", "safe")
         if duration:
             count_q = count_q.eq("market_duration", duration)
-        total = count_q.execute().count if hasattr(count_q.execute(), "count") else 0
-        batch_count_val = total % 200 if total % 200 != 0 else min(200, total)
+        total_signals = count_q.execute().count if hasattr(count_q.execute(), "count") else 0
+        batch_count_val = total_signals % 200 if total_signals % 200 != 0 else min(200, total_signals)
         signals = query.limit(batch_count_val if batch_count_val > 0 else 200).execute().data
+        # Latest batch number = ceil(total_signals / 200)
+        batch_num = (total_signals + 199) // 200 if total_signals > 0 else 0
 
     total = len(signals)
     if total == 0:
-        return {"total_signals": 0, "window": window_size, "profitable": 0, "resolved": 0, "roi_pct": 0.0, "recent_resolved": []}
+        return {"total_signals": 0, "window": window_size, "profitable": 0, "resolved": 0, "roi_pct": 0.0, "recent_resolved": [], "batch": batch_num}
 
     profitable = 0
     total_pnl = 0.0
@@ -513,6 +517,7 @@ def get_performance_summary(client: Client, duration: str | None = None, batch_o
         "resolved": resolved_count,
         "roi_pct": round(roi_pct, 1),
         "recent_resolved": recent_resolved,
+        "batch": batch_num,
     }
 
 
