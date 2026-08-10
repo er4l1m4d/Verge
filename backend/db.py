@@ -345,6 +345,7 @@ def get_recent_signals(client: Client, limit: int = 10, duration: str | None = N
             "note, divergence_signal, fear_greed_value, "
             "paper_trades!signal_id(resolved_outcome, simulated_pnl, decision)"
         )
+        .eq("mode", "safe")
         .order("id", desc=True)
     )
     if duration:
@@ -378,6 +379,7 @@ def get_performance_summary(client: Client, duration: str | None = None) -> dict
             "id, final_decision, market_window_start, market_duration, odds, "
             "paper_trades!signal_id(resolved_outcome, simulated_pnl, decision)"
         )
+        .eq("mode", "safe")
         .order("id", desc=True)
     )
     if duration:
@@ -436,7 +438,7 @@ def get_paginated_signals(
     Returns {signals: [...], total: N}.
     """
     # Count total
-    count_query = client.table("signals").select("id", count="exact")
+    count_query = client.table("signals").select("id", count="exact").eq("mode", "safe")
     if duration:
         count_query = count_query.eq("market_duration", duration)
     count_result = count_query.execute()
@@ -451,6 +453,7 @@ def get_paginated_signals(
             "note, divergence_signal, fear_greed_value, "
             "paper_trades!signal_id(resolved_outcome, simulated_pnl, decision)"
         )
+        .eq("mode", "safe")
         .order("id", desc=True)
     )
     if duration:
@@ -486,6 +489,7 @@ def get_batch_summaries(client: Client, duration: str | None = None, batch_size:
             "id, final_decision, market_duration, "
             "paper_trades!signal_id(resolved_outcome, simulated_pnl, decision)"
         )
+        .eq("mode", "safe")
         .order("id", desc=True)
     )
     if duration:
@@ -552,7 +556,7 @@ def get_stats(client: Client, duration: str | None = None) -> dict:
     """
     query = client.table("paper_trades").select(
         "decision, resolved_outcome, simulated_pnl, market_window_start, market_duration"
-    ).order("id", desc=True)
+    ).eq("mode", "safe").order("id", desc=True)
     if duration:
         query = query.eq("market_duration", duration)
     trades = query.execute().data
@@ -603,6 +607,7 @@ def get_rolling_stats(client: Client, duration: str | None = None, window: int =
     query = (
         client.table("paper_trades")
         .select("simulated_pnl, resolved_outcome")
+        .eq("mode", "safe")
         .not_.is_("resolved_outcome", "null")
         .order("id", desc=True)
     )
