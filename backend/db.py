@@ -438,11 +438,11 @@ def get_recent_signals(client: Client, limit: int = 10, duration: str | None = N
 
 
 def get_performance_summary(client: Client, duration: str | None = None, batch_offset: int | None = None, batch_count: int | None = None) -> dict:
-    """Rolling performance over signals.
+    """Performance summary for a specific batch or the latest batch.
 
     When batch_offset and batch_count are provided, computes stats for that
-    specific slice (e.g. batch 2 = offset 200, count 200).
-    Otherwise defaults to last 200 signals.
+    specific slice. Otherwise computes stats for the LATEST batch (the most
+    recent chunk of up to 200 signals).
 
     Uses PostgREST embedded resource query to avoid N+1 per-signal round-trips.
     Returns total signals in window, profitable count, cumulative ROI%,
@@ -465,7 +465,15 @@ def get_performance_summary(client: Client, duration: str | None = None, batch_o
         window_size = batch_count
         signals = query.range(batch_offset, batch_offset + batch_count - 1).execute().data
     else:
-        signals = query.limit(200).execute().data
+        # Latest batch: last chunk of up to 200 signals
+        # Compute batch_size so .limit() gets exactly the latest batch
+        count_q = client.table("signals").select("id", count="exact").eq("mode", "safe")
+        if duration:
+            count_q = count_q.eq("market_duration", duration)
+        total = count_q.execute().count if hasattr(count_q.execute(), "count") else 0
+        batch_count_val = total % 200 if total % 200 != 0 else min(200, total)
+        window_size = batch_count_val if batch_count_val > 0 else 200
+        signals = query.limit(window_size).execute().data
 
     total = len(signals)
     if total == 0:
