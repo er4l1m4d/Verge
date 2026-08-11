@@ -368,18 +368,22 @@ def get_unresolved_window_outcomes(client: Client, duration: str) -> list[int]:
 
     Returns sorted list of market_window_start values that need resolution.
     Filters out phantom windows (window_start=0).
+
+    Note: Explicit high limit to bypass Supabase's default 1000-row cap.
     """
     obs_result = (
         client.table("window_observations")
         .select("market_window_start")
         .eq("market_duration", duration)
         .neq("market_window_start", 0)
+        .limit(5000)
         .execute()
     )
     outcome_result = (
         client.table("window_outcomes")
         .select("market_window_start")
         .eq("market_duration", duration)
+        .limit(5000)
         .execute()
     )
     obs_set = {r["market_window_start"] for r in obs_result.data}

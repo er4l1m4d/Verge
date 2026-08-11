@@ -558,57 +558,32 @@ def freeze_duration():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/debug/resolve-15m")
+@app.route("/api/debug/resolve-status")
 @require_secret
-def debug_resolve_15m():
-    """Debug: trace 15m resolution for a specific window."""
+def debug_resolve_status():
+    """Debug: check resolution health for all durations."""
     import db
-    from market_config import get_config
-    from engine import _resolve_via_chainlink_ticks, _resolve_via_binance
+    from market_config import supported_durations
 
     client = db.get_client()
-    config = get_config("15m")
-    window_ms = config["window_ms"]
-
-    # Raw observation count
-    obs_all = (
-        client.table("window_observations")
-        .select("market_window_start", count="exact")
-        .eq("market_duration", "15m")
-        .execute()
-    )
-    obs_windows_raw = {r["market_window_start"] for r in obs_all.data if r["market_window_start"]}
-
-    # Raw outcome count
-    out_all = (
-        client.table("window_outcomes")
-        .select("market_window_start", count="exact")
-        .eq("market_duration", "15m")
-        .execute()
-    )
-    out_windows_raw = {r["market_window_start"] for r in out_all.data}
-
-    unresolved_raw = sorted(obs_windows_raw - out_windows_raw)
-
-    # Also use the standard function
-    unresolved_func = db.get_unresolved_window_outcomes(client, "15m")
-    unresolved_func = [w for w in unresolved_func if w > 0]
-
     now_ms = int(time.time() * 1000)
+    status = {}
 
-    return jsonify({
-        "obs_total_rows": len(obs_all.data),
-        "obs_distinct_windows": len(obs_windows_raw),
-        "obs_sample_windows": sorted(obs_windows_raw)[:5],
-        "out_total_rows": len(out_all.data),
-        "out_distinct_windows": len(out_windows_raw),
-        "out_sample_windows": sorted(out_windows_raw)[:5],
-        "unresolved_raw_count": len(unresolved_raw),
-        "unresolved_raw_sample": unresolved_raw[:5],
-        "unresolved_func_count": len(unresolved_func),
-        "unresolved_func_sample": unresolved_func[:5],
-        "now_ms": now_ms,
-    })
+    for dur in supported_durations():
+        from market_config import get_config
+        config = get_config(dur)
+        window_ms = config["window_ms"]
+
+        unresolved = db.get_unresolved_window_outcomes(client, dur)
+        unresolved = [w for w in unresolved if w > 0]
+        closed = [w for w in unresolved if w + window_ms <= now_ms]
+
+        status[dur] = {
+            "unresolved": len(unresolved),
+            "closed_needing_resolve": len(closed),
+        }
+
+    return jsonify(status)
 
 
 @app.route("/api/frozen")
