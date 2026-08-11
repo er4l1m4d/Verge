@@ -165,6 +165,17 @@ CREATE TABLE IF NOT EXISTS window_observations (
 );
 CREATE INDEX IF NOT EXISTS idx_window_obs_window
     ON window_observations(market_duration, market_window_start);
+
+-- Universal window outcomes: true UP/DOWN result for every window (Phase 1)
+CREATE TABLE IF NOT EXISTS window_outcomes (
+    market_duration TEXT NOT NULL,
+    market_window_start BIGINT NOT NULL,
+    actual_outcome TEXT NOT NULL,
+    resolved_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (market_duration, market_window_start)
+);
+CREATE INDEX IF NOT EXISTS idx_window_outcomes_duration
+    ON window_outcomes(market_duration);
 """
 
 
@@ -348,6 +359,129 @@ def cleanup_old_observations(client: Client, max_age_days: int = 30) -> None:
     client.table("window_observations").delete().lt("market_window_start", cutoff_ms).execute()
     set_setting(client, "last_observation_cleanup", str(now))
     log.info(f"Cleaned window_observations older than {max_age_days} days")
+
+
+# --- Window Outcomes ---
+
+def get_unresolved_window_outcomes(client: Client, duration: str) -> list[int]:
+    """Find windows with observations but no recorded outcome.
+
+    Returns sorted list of market_window_start values that need resolution.
+    """
+    obs_result = (
+        client.table("window_observations")
+        .select("market_window_start")
+        .eq("market_duration", duration)
+        .execute()
+    )
+    outcome_result = (
+        client.table("window_outcomes")
+        .select("market_window_start")
+        .eq("market_duration", duration)
+        .execute()
+    )
+    obs_set = {r["market_window_start"] for r in obs_result.data}
+    outcome_set = {r["market_window_start"] for r in outcome_result.data}
+    return sorted(obs_set - outcome_set)
+
+
+def write_window_outcome(client: Client, duration: str, window_start: int, outcome: str) -> None:
+    """Write the true outcome for a window to window_outcomes."""
+    client.table("window_outcomes").upsert({
+        "market_duration": duration,
+        "market_window_start": window_start,
+        "actual_outcome": outcome,
+    }).execute()
+    log.info(f"Wrote window_outcome duration={duration} window={window_start} outcome={outcome}")
+
+
+def get_window_outcome(client: Client, duration: str, window_start: int) -> dict | None:
+    """Get the outcome for a specific window, if it exists."""
+    result = (
+        client.table("window_outcomes")
+        .select("actual_outcome, resolved_at")
+        .eq("market_duration", duration)
+        .eq("market_window_start", window_start)
+        .limit(1)
+        .execute()
+    )
+    return result.data[0] if result.data else None
+
+
+def resolve_trade_with_outcome(
+    client: Client,
+    signal_id: int,
+    outcome: str,
+    odds: float = 0.50,
+    decision: str = "",
+) -> None:
+    """Resolve a paper trade using a pre-determined outcome.
+
+    Reuses the same outcome written to window_outcomes — no second lookup.
+    """
+    won = (decision == "BET HIGHER" and outcome == "UP") or \
+          (decision == "BET LOWER" and outcome == "DOWN")
+    if won:
+        pnl_pct = (1 / odds - 1) * 1.0
+    else:
+        pnl_pct = -1.0
+
+    update_paper_trade_resolution(
+        client,
+        signal_id=signal_id,
+        resolved_outcome=outcome,
+        simulated_pnl=round(pnl_pct, 4),
+    )
+
+
+def get_window_outcomes_with_observations(client: Client, duration: str, limit: int = 20) -> list[dict]:
+    """Get recent windows with outcomes and observation counts.
+
+    Returns list of dicts: { window_start, outcome, resolved_at, observation_count, has_trade }
+    """
+    # Get recent outcomes
+    outcomes = (
+        client.table("window_outcomes")
+        .select("market_window_start, actual_outcome, resolved_at")
+        .eq("market_duration", duration)
+        .order("market_window_start", desc=True)
+        .limit(limit)
+        .execute()
+    ).data
+
+    if not outcomes:
+        return []
+
+    result = []
+    for oc in outcomes:
+        ws = oc["market_window_start"]
+        # Count observations for this window
+        obs_count = (
+            client.table("window_observations")
+            .select("id", count="exact")
+            .eq("market_duration", duration)
+            .eq("market_window_start", ws)
+            .limit(1)
+            .execute()
+        ).count or 0
+        # Check if a trade exists
+        trade = (
+            client.table("paper_trades")
+            .select("signal_id, resolved_outcome, simulated_pnl, decision")
+            .eq("market_duration", duration)
+            .eq("market_window_start", ws)
+            .limit(1)
+            .execute()
+        ).data
+        result.append({
+            "window_start": ws,
+            "outcome": oc["actual_outcome"],
+            "resolved_at": oc["resolved_at"],
+            "observation_count": obs_count,
+            "has_trade": len(trade) > 0,
+            "trade": trade[0] if trade else None,
+        })
+    return result
 
 
 # --- Query functions ---

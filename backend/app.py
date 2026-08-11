@@ -624,5 +624,24 @@ def window_observations_recent():
         return jsonify([])
 
 
+@app.route("/api/window-outcomes/recent")
+@require_secret
+def window_outcomes_recent():
+    """Return recent windows with outcomes, observation counts, and trade info.
+
+    Used by the Timeline page to show readiness status per window.
+    """
+    try:
+        import db
+        duration = request.args.get("duration", "15m")
+        limit = request.args.get("limit", 20, type=int)
+        client = db.get_client()
+        result = db.get_window_outcomes_with_observations(client, duration, limit=limit)
+        return jsonify(result)
+    except Exception as e:
+        log.warning(f"window_outcomes_recent failed: {e}")
+        return jsonify([])
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5001, debug=True)

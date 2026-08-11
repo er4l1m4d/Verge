@@ -1441,6 +1441,42 @@
   .timeline-legend button[data-series="score"] { color: #00E5FF; }
   .timeline-legend button[data-series="rsi"] { color: var(--chalk); }
 
+  .timeline-status {
+    margin-top: 16px;
+    padding: 12px 16px;
+    background: var(--panel);
+    border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.06);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--chalk);
+    display: none;
+  }
+  .timeline-status.visible { display: block; }
+  .timeline-status .status-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 0;
+  }
+  .timeline-status .status-label {
+    color: var(--muted);
+    letter-spacing: 0.5px;
+  }
+  .timeline-status .status-value {
+    font-weight: 500;
+  }
+  .timeline-status .status-value.up { color: var(--signal-up); }
+  .timeline-status .status-value.down { color: var(--signal-down); }
+  .timeline-status .status-value.pending { color: var(--cost-amber); }
+  .timeline-status .status-value.ready { color: var(--signal-up); }
+  .timeline-status .status-value.waiting { color: var(--cost-amber); }
+  .timeline-status .status-divider {
+    border-top: 1px solid rgba(255,255,255,0.06);
+    margin: 6px 0;
+  }
+
   .timeline-empty {
     flex: 1;
     display: flex;
@@ -1595,6 +1631,7 @@
     <button class="active" data-series="score" onclick="toggleTimelineSeries('score', this)">Score</button>
     <button class="active" data-series="rsi" onclick="toggleTimelineSeries('rsi', this)">RSI</button>
   </div>
+  <div class="timeline-status" id="timeline-status"></div>
 </div>
 
 <!-- Signal Detail Modal (hidden by default) -->
@@ -2800,8 +2837,19 @@ async function loadRecentWindows() {
     loader.style.display = 'flex';
   }
   try {
-    const resp = await fetch(`${API_BASE}/api/window-observations/recent?duration=15m&limit=20`, { headers: authHeaders() });
-    const windows = await resp.json();
+    const [obsResp, outcomesResp] = await Promise.all([
+      fetch(`${API_BASE}/api/window-observations/recent?duration=15m&limit=20`, { headers: authHeaders() }),
+      fetch(`${API_BASE}/api/window-outcomes/recent?duration=15m&limit=20`, { headers: authHeaders() }),
+    ]);
+    const windows = await obsResp.json();
+    const outcomes = await outcomesResp.json();
+
+    // Build outcome lookup by window_start
+    const outcomeMap = {};
+    for (const oc of outcomes) {
+      outcomeMap[oc.window_start] = oc;
+    }
+
     const picker = document.getElementById('window-picker');
     if (!picker) return;
     if (windows.length === 0) {
@@ -2811,7 +2859,9 @@ async function loadRecentWindows() {
     picker.innerHTML = windows.map(w => {
       const dt = new Date(w.window_start);
       const label = dt.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York' });
-      return `<option value="${w.window_start}">${label} ET (${w.observation_count} pts)</option>`;
+      const oc = outcomeMap[w.window_start];
+      const outcomeTag = oc ? (oc.outcome === 'UP' ? ' — UP' : ' — DOWN') : ' — Pending';
+      return `<option value="${w.window_start}">${label} ET${outcomeTag} (${w.observation_count} pts)</option>`;
     }).join('');
     loadTimeline();
   } catch (e) {
@@ -2819,20 +2869,110 @@ async function loadRecentWindows() {
   }
 }
 
+let cachedOutcomes = {};
+
 async function loadTimeline() {
   const picker = document.getElementById('window-picker');
   if (!picker || !picker.value) return;
+  const windowStart = parseInt(picker.value, 10);
   try {
-    const resp = await fetch(`${API_BASE}/api/window-observations?duration=15m&window_start=${picker.value}`, { headers: authHeaders() });
-    timelineData = await resp.json();
+    const [obsResp, outcomeResp] = await Promise.all([
+      fetch(`${API_BASE}/api/window-observations?duration=15m&window_start=${windowStart}`, { headers: authHeaders() }),
+      fetch(`${API_BASE}/api/window-outcomes/recent?duration=15m&limit=20`, { headers: authHeaders() }),
+    ]);
+    timelineData = await obsResp.json();
+    const outcomes = await outcomeResp.json();
+    cachedOutcomes = {};
+    for (const oc of outcomes) {
+      cachedOutcomes[oc.window_start] = oc;
+    }
     const loader = document.getElementById('timeline-loader');
     if (loader) loader.style.display = 'none';
     const canvas = document.getElementById('timeline-chart');
     if (canvas) canvas.style.display = '';
     drawTimeline();
+    renderTimelineStatus(windowStart, timelineData);
   } catch (e) {
     console.error('Failed to load timeline:', e);
   }
+}
+
+function renderTimelineStatus(windowStart, ticks) {
+  const statusEl = document.getElementById('timeline-status');
+  if (!statusEl) return;
+
+  const oc = cachedOutcomes[windowStart];
+  const tickCount = ticks ? ticks.length : 0;
+
+  if (!oc) {
+    // No outcome yet — window might still be open or pending resolution
+    const closeTime = windowStart + 900000; // 15m in ms
+    const now = Date.now();
+    if (now < closeTime) {
+      statusEl.innerHTML = `
+        <div class="status-row">
+          <span class="status-label">Outcome</span>
+          <span class="status-value pending">Pending... (window open)</span>
+        </div>
+        <div class="status-divider"></div>
+        <div class="status-row">
+          <span class="status-label">Ticks recorded</span>
+          <span class="status-value">${tickCount} recorded</span>
+        </div>
+        <div class="status-divider"></div>
+        <div class="status-row">
+          <span class="status-label">Ready for comparison</span>
+          <span class="status-value waiting">⏳ Waiting for close</span>
+        </div>`;
+    } else {
+      statusEl.innerHTML = `
+        <div class="status-row">
+          <span class="status-label">Outcome</span>
+          <span class="status-value pending">Pending... (awaiting resolution)</span>
+        </div>
+        <div class="status-divider"></div>
+        <div class="status-row">
+          <span class="status-label">Ticks recorded</span>
+          <span class="status-value">${tickCount} recorded</span>
+        </div>
+        <div class="status-divider"></div>
+        <div class="status-row">
+          <span class="status-label">Ready for comparison</span>
+          <span class="status-value waiting">⏳ Awaiting resolution</span>
+        </div>`;
+    }
+    statusEl.classList.add('visible');
+    return;
+  }
+
+  // Outcome exists
+  const outcomeCls = oc.outcome === 'UP' ? 'up' : 'down';
+  const tradeInfo = oc.has_trade
+    ? `${oc.trade.decision} — ${oc.trade.resolved_outcome ? (oc.trade.simulated_pnl > 0 ? 'Won' : 'Lost') : 'Pending'}`
+    : 'None (SKIP)';
+  const readyCls = 'ready';
+
+  statusEl.innerHTML = `
+    <div class="status-row">
+      <span class="status-label">Outcome</span>
+      <span class="status-value ${outcomeCls}">${oc.outcome} ${oc.outcome === 'UP' ? '✅' : '❌'}</span>
+    </div>
+    <div class="status-divider"></div>
+    <div class="status-row">
+      <span class="status-label">Trades</span>
+      <span class="status-value">${tradeInfo}</span>
+    </div>
+    <div class="status-divider"></div>
+    <div class="status-row">
+      <span class="status-label">Ticks recorded</span>
+      <span class="status-value">${tickCount} recorded</span>
+    </div>
+    <div class="status-divider"></div>
+    <div class="status-row">
+      <span class="status-label">Ready for comparison</span>
+      <span class="status-value ${readyCls}">✅ Ready</span>
+    </div>`;
+  statusEl.classList.add('visible');
 }
 
 function toggleTimelineSeries(series, btn) {
