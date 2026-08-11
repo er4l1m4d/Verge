@@ -369,25 +369,48 @@ def get_unresolved_window_outcomes(client: Client, duration: str) -> list[int]:
     Returns sorted list of market_window_start values that need resolution.
     Filters out phantom windows (window_start=0).
 
-    Note: Explicit high limit to bypass Supabase's default 1000-row cap.
+    Uses pagination to bypass Supabase's default 1000-row limit.
     """
-    obs_result = (
-        client.table("window_observations")
-        .select("market_window_start")
-        .eq("market_duration", duration)
-        .neq("market_window_start", 0)
-        .limit(5000)
-        .execute()
-    )
-    outcome_result = (
-        client.table("window_outcomes")
-        .select("market_window_start")
-        .eq("market_duration", duration)
-        .limit(5000)
-        .execute()
-    )
-    obs_set = {r["market_window_start"] for r in obs_result.data}
-    outcome_set = {r["market_window_start"] for r in outcome_result.data}
+    # Paginate through all observations to get distinct window_starts
+    obs_set: set[int] = set()
+    offset = 0
+    page_size = 1000
+    while True:
+        result = (
+            client.table("window_observations")
+            .select("market_window_start")
+            .eq("market_duration", duration)
+            .neq("market_window_start", 0)
+            .range(offset, offset + page_size - 1)
+            .execute()
+        )
+        if not result.data:
+            break
+        for r in result.data:
+            obs_set.add(r["market_window_start"])
+        if len(result.data) < page_size:
+            break
+        offset += page_size
+
+    # Paginate through all outcomes
+    outcome_set: set[int] = set()
+    offset = 0
+    while True:
+        result = (
+            client.table("window_outcomes")
+            .select("market_window_start")
+            .eq("market_duration", duration)
+            .range(offset, offset + page_size - 1)
+            .execute()
+        )
+        if not result.data:
+            break
+        for r in result.data:
+            outcome_set.add(r["market_window_start"])
+        if len(result.data) < page_size:
+            break
+        offset += page_size
+
     return sorted(obs_set - outcome_set)
 
 
