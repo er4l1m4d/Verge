@@ -58,11 +58,11 @@ def send_telegram_alert(message: str, signal_id: int | None = None) -> bool:
         return False
 
 
-def format_signal_alert(sig) -> str:
+def format_signal_alert(sig, unlogged: bool = False) -> str:
     """Format a LiveSignal into a Telegram message.
 
     Only called for BET HIGHER / BET LOWER (never SKIP).
-    Includes time window, price context, and all indicator details.
+    Includes time window, price context, all indicator details, and time left.
     """
     direction_icon = "\U0001f4c8" if sig.final_decision == "BET HIGHER" else "\U0001f4c9"
     duration_label = "15M" if getattr(sig, "duration", "1h") == "15m" else "1H"
@@ -85,11 +85,20 @@ def format_signal_alert(sig) -> str:
     strike_str = f"${strike:,.2f}" if strike else "\u2014"
     current_str = f"${current:,.2f}" if current else "\u2014"
 
-    lines = [
+    minutes_left = getattr(sig, "minutes_remaining", None)
+    minutes_str = f"{minutes_left}m" if minutes_left is not None else "\u2014"
+
+    lines = []
+    if unlogged:
+        lines.append("\u26a0\ufe0f <i>Not recorded in signal log (persist failed)</i>")
+        lines.append("")
+
+    lines.extend([
         f"<b>{direction_icon} {sig.final_decision}</b>  \u00b7  {duration_label}",
         "",
         f"<b>Market:</b> {market_label}",
         f"<b>Window:</b> {window_line}",
+        f"<b>Time Left:</b> {minutes_str}",
         "",
         f"<b>Price to Beat:</b> {strike_str}",
         f"<b>Current Price:</b> {current_str}",
@@ -102,7 +111,7 @@ def format_signal_alert(sig) -> str:
         f"<b>RSI:</b> {sig.rsi:.1f}",
         f"<b>MA:</b> {'▲' if sig.ma_signal > 0 else '▼' if sig.ma_signal < 0 else '—'}",
         f"<b>Volume:</b> {'▲' if sig.volume_signal > 0 else '▼' if sig.volume_signal < 0 else '—'}",
-    ]
+    ])
 
     if sig.fee_eroded:
         lines.append("")
@@ -111,13 +120,13 @@ def format_signal_alert(sig) -> str:
     return "\n".join(lines)
 
 
-def alert_on_signal(sig, signal_id: int | None = None) -> None:
+def alert_on_signal(sig, signal_id: int | None = None, unlogged: bool = False) -> None:
     """Send Telegram alert if signal is a BET (not SKIP).
 
     Called from the heartbeat endpoint.
     """
     if sig.final_decision in ("BET HIGHER", "BET LOWER"):
-        message = format_signal_alert(sig)
+        message = format_signal_alert(sig, unlogged=unlogged)
         send_telegram_alert(message, signal_id=signal_id)
 
 
@@ -218,7 +227,7 @@ def send_hourly_summary(client) -> bool:
     """Send hourly 15m summary if we're at the top of the hour.
 
     Called from the heartbeat. Queries the previous hour's 15m signals
-    and sends a summary message.
+    and sends a summary message. Deduplicates via settings table.
     """
     now = datetime.now(ET)
     if now.minute > 5:
@@ -231,10 +240,23 @@ def send_hourly_summary(client) -> bool:
     hour_start_ms = int(hour_start.timestamp() * 1000)
     hour_end_ms = int(hour_end.timestamp() * 1000)
 
+    # Dedup: check if summary was already sent this hour
+    import db
+    last_sent = db.get_setting(client, "last_hourly_summary_at")
+    if last_sent:
+        try:
+            if int(last_sent) >= hour_start_ms:
+                return False
+        except (ValueError, TypeError):
+            pass
+
     try:
         signals = get_signals_for_hour(client, hour_start_ms, hour_end_ms, duration="15m")
         message = format_hourly_summary(signals, hour_start_ms)
-        return send_telegram_alert(message)
+        sent = send_telegram_alert(message)
+        if sent:
+            db.set_setting(client, "last_hourly_summary_at", str(int(now.timestamp() * 1000)))
+        return sent
     except Exception as e:
         log.warning(f"Hourly summary failed: {e}")
         return False

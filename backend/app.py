@@ -22,8 +22,9 @@ from telegram import alert_on_signal, send_hourly_summary, start_bot_listener
 
 app = Flask(__name__)
 
-# Start Telegram bot listener for /start commands (once at module load)
-start_bot_listener()
+# Start Telegram bot listener for /start commands (once, primary worker only)
+if os.environ.get("WEB_CONCURRENCY", "1") == "1":
+    start_bot_listener()
 
 # CORS: restrict to Vercel frontend in production, allow all in dev
 VERCEL_URL = os.environ.get("VERCEL_URL", "")
@@ -342,9 +343,10 @@ def heartbeat():
 
                 # Persist signal
                 try:
-                    sig_id = persist_signal(sig)
+                    sig_id, persist_status = persist_signal(sig)
                 except Exception as e:
                     sig_id = None
+                    persist_status = "error"
                     log.warning(f"Persist failed for {dur} (non-fatal): {e}")
 
                 # Record Chainlink price tick for 15m bar-building
@@ -354,11 +356,14 @@ def heartbeat():
                     except Exception as e:
                         log.warning(f"Price tick recording failed for {dur} (non-fatal): {e}")
 
-                # Telegram alert
-                try:
-                    alert_on_signal(sig, signal_id=sig_id)
-                except Exception as e:
-                    log.warning(f"Telegram alert failed for {dur} (non-fatal): {e}")
+                # Telegram alert (only on new signal or persist failure)
+                if persist_status == "duplicate":
+                    log.info(f"Skipping duplicate alert for {dur} window {sig.hour_open_time}")
+                else:
+                    try:
+                        alert_on_signal(sig, signal_id=sig_id, unlogged=(persist_status == "error"))
+                    except Exception as e:
+                        log.warning(f"Telegram alert failed for {dur} (non-fatal): {e}")
 
                 # Try to resolve previous window's trades
                 try:

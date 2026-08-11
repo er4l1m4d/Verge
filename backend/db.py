@@ -682,6 +682,8 @@ def get_stats(client: Client, duration: str | None = None) -> dict:
     safe_cumulative_pnl = sum(t.get("simulated_pnl", 0) for t in safe_resolved)
     unlock_real_orders = safe_total >= 200 and safe_cumulative_pnl > 0
 
+    roi_pct = (cumulative_pnl / total * 100) if total > 0 else 0
+
     return {
         "total_trades": total,
         "resolved": len(resolved),
@@ -689,6 +691,7 @@ def get_stats(client: Client, duration: str | None = None) -> dict:
         "losses": len(losses),
         "win_rate": round(win_rate, 1),
         "cumulative_pnl": round(cumulative_pnl, 2),
+        "roi_pct": round(roi_pct, 1),
         "unlock_real_orders": unlock_real_orders,
         "recent_trades": recent,
         "recent_signals": recent_signals,
