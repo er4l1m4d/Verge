@@ -18,9 +18,12 @@ from functools import wraps
 sys.path.insert(0, os.path.dirname(__file__))
 
 from engine import generate_signal, persist_signal, resolve_previous_hour, record_price_tick
-from telegram import alert_on_signal
+from telegram import alert_on_signal, send_hourly_summary, start_bot_listener
 
 app = Flask(__name__)
+
+# Start Telegram bot listener for /start commands (once at module load)
+start_bot_listener()
 
 # CORS: restrict to Vercel frontend in production, allow all in dev
 VERCEL_URL = os.environ.get("VERCEL_URL", "")
@@ -372,6 +375,12 @@ def heartbeat():
             except Exception as e:
                 log.warning(f"Heartbeat failed for {dur}: {e}")
                 results.append({"duration": dur, "error": str(e)})
+
+        # Hourly 15m summary (sent at top of hour, non-fatal)
+        try:
+            send_hourly_summary(client)
+        except Exception as e:
+            log.warning(f"Hourly summary failed (non-fatal): {e}")
 
         return jsonify({
             "status": "ok",
