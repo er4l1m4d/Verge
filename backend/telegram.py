@@ -255,7 +255,7 @@ def send_hourly_summary(client) -> bool:
         message = format_hourly_summary(signals, hour_start_ms)
         sent = send_telegram_alert(message)
         if sent:
-            db.set_setting(client, "last_hourly_summary_at", str(int(now.timestamp() * 1000)))
+            db.set_setting(client, "last_hourly_summary_at", str(hour_start_ms))
         return sent
     except Exception as e:
         log.warning(f"Hourly summary failed: {e}")

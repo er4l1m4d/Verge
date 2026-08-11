@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS window_outcomes (
 CREATE INDEX IF NOT EXISTS idx_window_outcomes_duration
     ON window_outcomes(market_duration);
 
--- RLS: allow service role full access
+-- RLS: allow anon key (backend service) full access (matches 002 pattern)
 ALTER TABLE window_outcomes ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Service role full access" ON window_outcomes
-    FOR ALL USING (auth.role() = 'service_role');
+CREATE POLICY "anon_full_access" ON window_outcomes
+    FOR ALL USING (auth.role() = 'anon');

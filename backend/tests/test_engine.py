@@ -186,6 +186,7 @@ class TestFlaskAPI:
     @patch("db.get_frozen_durations", return_value=set())
     @patch("db.get_client")
     def test_heartbeat_calls_persist(self, mock_db_client, mock_frozen, mock_resolve, mock_persist, mock_get, mock_klines):
+        mock_resolve.return_value = False
         client = app.test_client()
         resp = client.get("/api/heartbeat")
         assert resp.status_code == 200

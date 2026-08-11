@@ -366,8 +366,10 @@ def heartbeat():
                         log.warning(f"Telegram alert failed for {dur} (non-fatal): {e}")
 
                 # Try to resolve previous window's trades
+                resolved_info = None
                 try:
-                    resolve_previous_hour(duration=dur)
+                    resolved = resolve_previous_hour(duration=dur)
+                    resolved_info = resolved
                 except Exception as e:
                     log.warning(f"Resolution check failed for {dur} (non-fatal): {e}")
 
@@ -376,6 +378,7 @@ def heartbeat():
                     "decision": sig.final_decision,
                     "market": sig.market_slug,
                     "minutes_remaining": sig.minutes_remaining,
+                    "resolved": resolved_info,
                 })
             except Exception as e:
                 log.warning(f"Heartbeat failed for {dur}: {e}")
@@ -598,26 +601,9 @@ def window_observations_recent():
     try:
         import db
         duration = request.args.get("duration", "15m")
-        limit = request.args.get("limit", 10, type=int)
+        limit = request.args.get("limit", 20, type=int)
         client = db.get_client()
-        result = (
-            client.table("window_observations")
-            .select("*")
-            .eq("market_duration", duration)
-            .order("market_window_start", desc=True)
-            .limit(limit * 5)
-            .execute()
-        )
-        seen = {}
-        for row in result.data:
-            ws = row["market_window_start"]
-            if ws not in seen:
-                seen[ws] = 0
-            seen[ws] += 1
-        windows = [
-            {"window_start": ws, "observation_count": cnt}
-            for ws, cnt in list(seen.items())[:limit]
-        ]
+        windows = db.get_distinct_observation_windows(client, duration, limit=limit)
         return jsonify(windows)
     except Exception as e:
         log.warning(f"window_observations_recent failed: {e}")

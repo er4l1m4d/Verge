@@ -367,11 +367,13 @@ def get_unresolved_window_outcomes(client: Client, duration: str) -> list[int]:
     """Find windows with observations but no recorded outcome.
 
     Returns sorted list of market_window_start values that need resolution.
+    Filters out phantom windows (window_start=0).
     """
     obs_result = (
         client.table("window_observations")
         .select("market_window_start")
         .eq("market_duration", duration)
+        .neq("market_window_start", 0)
         .execute()
     )
     outcome_result = (
@@ -432,6 +434,38 @@ def resolve_trade_with_outcome(
         resolved_outcome=outcome,
         simulated_pnl=round(pnl_pct, 4),
     )
+
+
+def get_distinct_observation_windows(client: Client, duration: str, limit: int = 20) -> list[dict]:
+    """Get distinct windows from window_observations with observation counts.
+
+    Uses a grouped query instead of fetching all rows and deduplicating in Python.
+    Returns list of dicts: { window_start, observation_count } sorted by window_start desc.
+    """
+    # Fetch distinct window_start values with their observation counts
+    result = (
+        client.table("window_observations")
+        .select("market_window_start")
+        .eq("market_duration", duration)
+        .neq("market_window_start", 0)
+        .order("market_window_start", desc=True)
+        .limit(limit * 20)  # fetch enough rows to cover 'limit' unique windows
+        .execute()
+    )
+
+    # Group by window_start and count
+    seen = {}
+    for row in result.data:
+        ws = row["market_window_start"]
+        if ws not in seen:
+            seen[ws] = 0
+        seen[ws] += 1
+
+    windows = [
+        {"window_start": ws, "observation_count": cnt}
+        for ws, cnt in list(seen.items())[:limit]
+    ]
+    return windows
 
 
 def get_window_outcomes_with_observations(client: Client, duration: str, limit: int = 20) -> list[dict]:

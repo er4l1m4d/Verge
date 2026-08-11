@@ -745,7 +745,15 @@ def resolve_previous_hour(duration: str = "1h") -> bool:
     client = db.get_client()
 
     # Find windows that need resolution (have observations, no outcome yet)
-    unresolved_windows = db.get_unresolved_window_outcomes(client, duration)
+    try:
+        unresolved_windows = db.get_unresolved_window_outcomes(client, duration)
+    except Exception as e:
+        log.warning(f"Failed to fetch unresolved window outcomes: {e}")
+        return False
+
+    # Filter out phantom windows (window_start=0)
+    unresolved_windows = [w for w in unresolved_windows if w > 0]
+
     if not unresolved_windows:
         return False
 
@@ -818,43 +826,72 @@ def _resolve_via_binance(window_start: int, window_close: int) -> str | None:
 
 
 def _resolve_via_chainlink_ticks(client, window_start: int, window_close: int) -> str | None:
-    """Resolve outcome via Chainlink ticks from price_snapshots, with Coinbase fallback.
+    """Resolve outcome via Chainlink ticks from price_snapshots, with Coinbase and Binance fallbacks.
 
     Returns 'UP' or 'DOWN', or None if data unavailable.
+    Resolution order: Chainlink ticks → Coinbase spot → Binance 5m candles.
     """
-    ticks = db.get_price_snapshots(
-        client, source="chainlink", symbol="BTC",
-        since_ms=window_start, limit=1000,
-    )
-    window_ticks = [t for t in ticks if t["timestamp_ms"] <= window_close]
-
-    if len(window_ticks) >= 2:
-        open_price = float(window_ticks[0]["price"])
-        close_price = float(window_ticks[-1]["price"])
-        outcome = "UP" if close_price > open_price else "DOWN"
-        log.info(
-            f"15m resolution via ticks: open=${open_price:,.2f} "
-            f"close=${close_price:,.2f} -> {outcome} "
-            f"({len(window_ticks)} ticks)"
+    # 1. Try Chainlink ticks
+    try:
+        ticks = db.get_price_snapshots(
+            client, source="chainlink", symbol="BTC",
+            since_ms=window_start, limit=1000,
         )
-        return outcome
+        window_ticks = [t for t in ticks if t["timestamp_ms"] <= window_close]
 
-    # Insufficient ticks — fallback to Coinbase
-    from data_fetcher import get_price_at_time
-    open_price = get_price_at_time(window_start)
-    close_price = get_price_at_time(window_close)
-    if open_price and close_price:
-        outcome = "UP" if close_price > open_price else "DOWN"
-        log.info(
-            f"15m resolution via Coinbase fallback: open=${open_price:,.2f} "
-            f"close=${close_price:,.2f} -> {outcome} "
-            f"({len(window_ticks)} ticks, fallback used)"
+        if len(window_ticks) >= 2:
+            open_price = float(window_ticks[0]["price"])
+            close_price = float(window_ticks[-1]["price"])
+            outcome = "UP" if close_price > open_price else "DOWN"
+            log.info(
+                f"15m resolution via ticks: open=${open_price:,.2f} "
+                f"close=${close_price:,.2f} -> {outcome} "
+                f"({len(window_ticks)} ticks)"
+            )
+            return outcome
+    except Exception as e:
+        log.warning(f"Chainlink tick resolution failed: {e}")
+
+    # 2. Try Coinbase spot prices
+    try:
+        from data_fetcher import get_price_at_time
+        open_price = get_price_at_time(window_start)
+        close_price = get_price_at_time(window_close)
+        if open_price and close_price:
+            outcome = "UP" if close_price > open_price else "DOWN"
+            log.info(
+                f"15m resolution via Coinbase: open=${open_price:,.2f} "
+                f"close=${close_price:,.2f} -> {outcome}"
+            )
+            return outcome
+    except Exception as e:
+        log.warning(f"Coinbase resolution failed: {e}")
+
+    # 3. Try Binance 5m candles as final fallback
+    try:
+        from data_fetcher import get_binance_klines
+        df = get_binance_klines(
+            symbol="BTCUSDT",
+            interval="5m",
+            start_time=window_start,
+            end_time=window_close,
+            limit=20,
         )
-        return outcome
+        if df is not None and len(df) >= 2:
+            open_price = float(df.iloc[0]["open"])
+            close_price = float(df.iloc[-1]["close"])
+            outcome = "UP" if close_price > open_price else "DOWN"
+            log.info(
+                f"15m resolution via Binance 5m: open=${open_price:,.2f} "
+                f"close=${close_price:,.2f} -> {outcome} "
+                f"({len(df)} candles)"
+            )
+            return outcome
+    except Exception as e:
+        log.warning(f"Binance 5m resolution failed: {e}")
 
     log.warning(
-        f"Insufficient ticks for 15m resolution "
-        f"({len(window_ticks)} ticks, need >=2) and Coinbase fallback failed"
+        f"All resolution methods failed for window {window_start}-{window_close}"
     )
     return None
 
