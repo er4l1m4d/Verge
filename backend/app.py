@@ -339,8 +339,9 @@ def heartbeat():
 
                 # Persist signal
                 try:
-                    persist_signal(sig)
+                    sig_id = persist_signal(sig)
                 except Exception as e:
+                    sig_id = None
                     log.warning(f"Persist failed for {dur} (non-fatal): {e}")
 
                 # Record Chainlink price tick for 15m bar-building
@@ -352,7 +353,7 @@ def heartbeat():
 
                 # Telegram alert
                 try:
-                    alert_on_signal(sig)
+                    alert_on_signal(sig, signal_id=sig_id)
                 except Exception as e:
                     log.warning(f"Telegram alert failed for {dur} (non-fatal): {e}")
 
@@ -477,6 +478,34 @@ def signal_log():
     except Exception as e:
         log.warning(f"Signal log query failed: {e}")
         return jsonify({"signals": [], "total": 0})
+
+
+@app.route("/api/signal-log/<int:signal_id>")
+@require_secret
+def signal_log_detail(signal_id):
+    """Fetch a single signal by ID for deep-linking."""
+    try:
+        import db
+        client = db.get_client()
+        resp = client.table("signals").select(
+            "id, final_decision, market_window_start, timestamp, score, market_duration, "
+            "strike_price, current_price, odds, edge_pct, rsi, ma_signal, volume_signal, "
+            "note, divergence_signal, fear_greed_value"
+        ).eq("id", signal_id).execute()
+        if not resp.data:
+            return jsonify({"error": "Signal not found"}), 404
+        signal = resp.data[0]
+        pt = client.table("paper_trades").select(
+            "resolved_outcome, simulated_pnl, decision"
+        ).eq("signal_id", signal_id).execute()
+        if pt.data:
+            signal["resolved_outcome"] = pt.data[0].get("resolved_outcome")
+            signal["simulated_pnl"] = pt.data[0].get("simulated_pnl")
+            signal["decision"] = pt.data[0].get("decision")
+        return jsonify(signal)
+    except Exception as e:
+        log.warning(f"Signal detail query failed: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/signal-log/batches")

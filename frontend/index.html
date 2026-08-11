@@ -2395,7 +2395,30 @@ async function poll() {
 }
 
 // Initial load
-fetchFrozenDurations().then(() => poll());
+fetchFrozenDurations().then(() => {
+  poll();
+  // Deep-link: open signal modal from URL hash
+  const hash = window.location.hash;
+  if (hash.startsWith('#signal/')) {
+    const signalId = parseInt(hash.replace('#signal/', ''), 10);
+    if (signalId) {
+      showSignalLogPage();
+      setTimeout(() => openSignalModal(signalId), 500);
+    }
+  }
+});
+
+// Handle hash changes for in-page navigation
+window.addEventListener('hashchange', () => {
+  const hash = window.location.hash;
+  if (hash.startsWith('#signal/')) {
+    const signalId = parseInt(hash.replace('#signal/', ''), 10);
+    if (signalId) {
+      showSignalLogPage();
+      setTimeout(() => openSignalModal(signalId), 500);
+    }
+  }
+});
 
 // Start polling intervals
 window._pollInterval = setInterval(poll, 30000);
@@ -2638,11 +2661,12 @@ async function openSignalModal(signalId) {
   if (content) content.innerHTML = loadingHTML('Loading signal');
   modal.style.display = 'flex';
   try {
-    const resp = await fetch(`${API_BASE}/api/signal-log?offset=0&limit=1000&duration=${currentDuration}&duration=${currentDuration}`, { headers: authHeaders() });
-    if (!resp.ok) return;
-    const data = await resp.json();
-    const sig = data.signals.find(s => s.id === signalId);
-    if (!sig) return;
+    const resp = await fetch(`${API_BASE}/api/signal-log/${signalId}`, { headers: authHeaders() });
+    if (!resp.ok) {
+      if (content) content.innerHTML = '<div style="padding:24px;text-align:center;color:var(--muted);">Signal not found</div>';
+      return;
+    }
+    const sig = await resp.json();
 
     const dt = new Date(sig.market_window_start);
     const endDt = new Date(sig.market_window_start + (sig.market_duration === '15m' ? 900000 : 3600000));

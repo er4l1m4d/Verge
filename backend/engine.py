@@ -617,8 +617,11 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
 
 # --- Phase 5: Persistence ---
 
-def persist_signal(sig: LiveSignal) -> None:
-    """Write signal + paper trade + odds snapshot to Supabase (Phase 5.2)."""
+def persist_signal(sig: LiveSignal) -> int | None:
+    """Write signal + paper trade + odds snapshot to Supabase (Phase 5.2).
+
+    Returns the inserted signal ID, or None if already exists.
+    """
     import db
 
     client = db.get_client()
@@ -629,7 +632,7 @@ def persist_signal(sig: LiveSignal) -> None:
     existing = db.get_existing_signal(client, window, duration=sig.duration, mode=mode)
     if existing:
         log.info(f"Signal already exists for window {window} duration={sig.duration}, skipping write")
-        return
+        return None
 
     # Write signal (always)
     signal_id = db.write_signal(client, db.SignalRow(
@@ -671,6 +674,8 @@ def persist_signal(sig: LiveSignal) -> None:
             suggested_price=sig.suggested_price,
             mode=mode,
         ))
+
+    return signal_id
 
     # Write odds snapshot (every heartbeat tick)
     if sig.market_token_id and sig.odds > 0:
