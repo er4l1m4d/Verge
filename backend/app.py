@@ -558,6 +558,73 @@ def freeze_duration():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/debug/resolve-15m")
+@require_secret
+def debug_resolve_15m():
+    """Debug: trace 15m resolution for a specific window."""
+    import db
+    from market_config import get_config
+    from engine import _resolve_via_chainlink_ticks, _resolve_via_binance
+
+    client = db.get_client()
+    config = get_config("15m")
+    window_ms = config["window_ms"]
+
+    unresolved = db.get_unresolved_window_outcomes(client, "15m")
+    unresolved = [w for w in unresolved if w > 0]
+    now_ms = int(time.time() * 1000)
+
+    results = []
+    for ws in unresolved[:5]:  # test first 5
+        close_ms = ws + window_ms
+        closed = close_ms <= now_ms
+        entry = {"window_start": ws, "close_ms": close_ms, "closed": closed}
+
+        if closed:
+            # Try each resolution method individually
+            # 1. Chainlink ticks
+            try:
+                ticks = db.get_price_snapshots(
+                    client, source="chainlink", symbol="BTC",
+                    since_ms=ws, limit=1000,
+                )
+                window_ticks = [t for t in ticks if t["timestamp_ms"] <= close_ms]
+                entry["chainlink_ticks"] = len(window_ticks)
+                if len(window_ticks) >= 2:
+                    entry["chainlink_outcome"] = "UP" if float(window_ticks[-1]["price"]) > float(window_ticks[0]["price"]) else "DOWN"
+            except Exception as e:
+                entry["chainlink_error"] = str(e)
+
+            # 2. Binance 5m
+            try:
+                from data_fetcher import get_binance_klines
+                df = get_binance_klines(symbol="BTCUSDT", interval="5m", start_time=ws, end_time=close_ms, limit=20)
+                entry["binance_5m_candles"] = len(df) if df is not None else 0
+                if df is not None and len(df) >= 2:
+                    op = float(df.iloc[0]["open"])
+                    cl = float(df.iloc[-1]["close"])
+                    entry["binance_5m_outcome"] = "UP" if cl > op else "DOWN"
+                    entry["binance_5m_open"] = op
+                    entry["binance_5m_close"] = cl
+            except Exception as e:
+                entry["binance_5m_error"] = str(e)
+
+            # 3. Full resolution attempt
+            try:
+                outcome = _resolve_via_chainlink_ticks(client, ws, close_ms)
+                entry["full_resolution"] = outcome
+            except Exception as e:
+                entry["full_resolution_error"] = str(e)
+
+        results.append(entry)
+
+    return jsonify({
+        "total_unresolved": len(unresolved),
+        "tested": results,
+        "now_ms": now_ms,
+    })
+
+
 @app.route("/api/frozen")
 @require_secret
 def get_frozen():
