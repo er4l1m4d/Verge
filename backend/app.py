@@ -598,6 +598,34 @@ def get_frozen():
         return jsonify({"frozen": []})
 
 
+@app.route("/api/phase2-progress")
+@require_secret
+def phase2_progress():
+    """Phase 2 readiness: count resolved windows per duration."""
+    try:
+        import db
+        client = db.get_client()
+        target = 300
+        result = {}
+        for dur in ("1h", "15m"):
+            outcomes = (
+                client.table("window_outcomes")
+                .select("market_window_start", count="exact")
+                .eq("market_duration", dur)
+                .limit(5000)
+                .execute()
+            )
+            count = outcomes.count if hasattr(outcomes, 'count') else len(outcomes.data)
+            result[dur] = {"resolved": count, "target": target}
+        total_1h = result["1h"]["resolved"]
+        total_15m = result["15m"]["resolved"]
+        result["total"] = {"resolved": total_1h + total_15m, "target": target}
+        return jsonify(result)
+    except Exception as e:
+        log.warning(f"phase2-progress failed: {e}")
+        return jsonify({"1h": {"resolved": 0, "target": 300}, "15m": {"resolved": 0, "target": 300}, "total": {"resolved": 0, "target": 300}})
+
+
 @app.route("/api/window-observations")
 @require_secret
 def window_observations():

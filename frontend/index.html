@@ -1337,6 +1337,17 @@
     flex-direction: column;
     min-height: 100vh;
     background: var(--bg);
+    width: 100vw;
+    margin-left: calc(-50vw + 50%);
+    overflow-x: hidden;
+  }
+
+  .timeline-inner {
+    max-width: 960px;
+    width: 100%;
+    margin: 0 auto;
+    padding: 0 20px;
+    box-sizing: border-box;
   }
 
   .timeline-header {
@@ -1487,6 +1498,53 @@
     font-family: var(--font-mono);
     font-size: 12px;
   }
+
+  .timeline-phase2-progress {
+    margin-bottom: 12px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  .phase2-bar-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 4px;
+    color: var(--muted);
+    letter-spacing: 0.3px;
+  }
+
+  .phase2-bar-label .phase2-count {
+    color: var(--chalk);
+    font-weight: 500;
+  }
+
+  .phase2-bar-track {
+    width: 100%;
+    height: 6px;
+    background: rgba(255,255,255,0.06);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .phase2-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    background: var(--cost-amber);
+    transition: width 0.6s ease, background 0.3s ease;
+  }
+
+  .phase2-bar-fill.complete {
+    background: var(--signal-up);
+  }
+
+  .phase2-bar-durations {
+    display: flex;
+    gap: 16px;
+    margin-top: 4px;
+    color: var(--static);
+    font-size: 10px;
+  }
 </style>
 </head>
 <body>
@@ -1605,34 +1663,37 @@
 </div>
 
 <!-- Timeline Page (hidden by default) -->
-<div class="container timeline-page" id="timeline-page">
-  <div class="status-band">
-    <div class="status-wordmark">VERGE</div>
-    <div class="status-right">
-      <div class="status-asset">BTC</div>
-      <div class="status-live">
-        <div class="heartbeat-dot"></div>
-        <span>live</span>
+<div class="timeline-page" id="timeline-page">
+  <div class="timeline-inner">
+    <div class="status-band">
+      <div class="status-wordmark">VERGE</div>
+      <div class="status-right">
+        <div class="status-asset">BTC</div>
+        <div class="status-live">
+          <div class="heartbeat-dot"></div>
+          <span>live</span>
+        </div>
       </div>
     </div>
+    <div class="timeline-header">
+      <button class="timeline-back" id="timeline-back">&larr; Dashboard</button>
+      <span class="timeline-title">Window Timeline</span>
+    </div>
+    <div class="timeline-controls">
+      <label>Window:</label>
+      <select class="window-picker" id="window-picker" onchange="loadTimeline()"></select>
+    </div>
+    <div class="timeline-phase2-progress" id="timeline-phase2-progress"></div>
+    <div class="timeline-chart-wrap" id="timeline-chart-wrap">
+      <canvas id="timeline-chart"></canvas>
+    </div>
+    <div class="timeline-legend">
+      <button class="active" data-series="odds" onclick="toggleTimelineSeries('odds', this)">Odds</button>
+      <button class="active" data-series="score" onclick="toggleTimelineSeries('score', this)">Score</button>
+      <button class="active" data-series="rsi" onclick="toggleTimelineSeries('rsi', this)">RSI</button>
+    </div>
+    <div class="timeline-status" id="timeline-status"></div>
   </div>
-  <div class="timeline-header">
-    <button class="timeline-back" id="timeline-back">&larr; Dashboard</button>
-    <span class="timeline-title">Window Timeline</span>
-  </div>
-  <div class="timeline-controls">
-    <label>Window:</label>
-    <select class="window-picker" id="window-picker" onchange="loadTimeline()"></select>
-  </div>
-  <div class="timeline-chart-wrap" id="timeline-chart-wrap">
-    <canvas id="timeline-chart"></canvas>
-  </div>
-  <div class="timeline-legend">
-    <button class="active" data-series="odds" onclick="toggleTimelineSeries('odds', this)">Odds</button>
-    <button class="active" data-series="score" onclick="toggleTimelineSeries('score', this)">Score</button>
-    <button class="active" data-series="rsi" onclick="toggleTimelineSeries('rsi', this)">RSI</button>
-  </div>
-  <div class="timeline-status" id="timeline-status"></div>
 </div>
 
 <!-- Signal Detail Modal (hidden by default) -->
@@ -2823,6 +2884,36 @@ function hideTimelinePage() {
   document.querySelector('.footer').style.display = '';
 }
 
+async function loadPhase2Progress() {
+  const el = document.getElementById('timeline-phase2-progress');
+  if (!el) return;
+  try {
+    const res = await fetch(`${API}/api/phase2-progress`, { headers: { 'X-Secret': SECRET } });
+    const data = await res.json();
+    const total = data.total || { resolved: 0, target: 300 };
+    const pct = Math.min(100, Math.round((total.resolved / total.target) * 100));
+    const complete = pct >= 100;
+    const c15 = data['15m'] || { resolved: 0 };
+    const c1h = data['1h'] || { resolved: 0 };
+    el.innerHTML = `
+      <div class="phase2-bar-label">
+        <span>Phase 2 Data</span>
+        <span class="phase2-count">${total.resolved}/${total.target} windows</span>
+      </div>
+      <div class="phase2-bar-track">
+        <div class="phase2-bar-fill${complete ? ' complete' : ''}" style="width:${pct}%"></div>
+      </div>
+      <div class="phase2-bar-durations">
+        <span>15m: ${c15.resolved}</span>
+        <span>1h: ${c1h.resolved}</span>
+        <span>${pct}%</span>
+      </div>
+    `;
+  } catch (e) {
+    el.innerHTML = '';
+  }
+}
+
 async function loadRecentWindows() {
   const wrap = document.getElementById('timeline-chart-wrap');
   if (wrap) {
@@ -2837,6 +2928,7 @@ async function loadRecentWindows() {
     loader.innerHTML = loadingHTML('Loading timeline');
     loader.style.display = 'flex';
   }
+  loadPhase2Progress();
   try {
     const [obsResp, outcomesResp] = await Promise.all([
       fetch(`${API_BASE}/api/window-observations/recent?duration=15m&limit=20`, { headers: authHeaders() }),
