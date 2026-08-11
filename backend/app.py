@@ -570,57 +570,43 @@ def debug_resolve_15m():
     config = get_config("15m")
     window_ms = config["window_ms"]
 
-    unresolved = db.get_unresolved_window_outcomes(client, "15m")
-    unresolved = [w for w in unresolved if w > 0]
+    # Raw observation count
+    obs_all = (
+        client.table("window_observations")
+        .select("market_window_start", count="exact")
+        .eq("market_duration", "15m")
+        .execute()
+    )
+    obs_windows_raw = {r["market_window_start"] for r in obs_all.data if r["market_window_start"]}
+
+    # Raw outcome count
+    out_all = (
+        client.table("window_outcomes")
+        .select("market_window_start", count="exact")
+        .eq("market_duration", "15m")
+        .execute()
+    )
+    out_windows_raw = {r["market_window_start"] for r in out_all.data}
+
+    unresolved_raw = sorted(obs_windows_raw - out_windows_raw)
+
+    # Also use the standard function
+    unresolved_func = db.get_unresolved_window_outcomes(client, "15m")
+    unresolved_func = [w for w in unresolved_func if w > 0]
+
     now_ms = int(time.time() * 1000)
 
-    results = []
-    for ws in unresolved[:5]:  # test first 5
-        close_ms = ws + window_ms
-        closed = close_ms <= now_ms
-        entry = {"window_start": ws, "close_ms": close_ms, "closed": closed}
-
-        if closed:
-            # Try each resolution method individually
-            # 1. Chainlink ticks
-            try:
-                ticks = db.get_price_snapshots(
-                    client, source="chainlink", symbol="BTC",
-                    since_ms=ws, limit=1000,
-                )
-                window_ticks = [t for t in ticks if t["timestamp_ms"] <= close_ms]
-                entry["chainlink_ticks"] = len(window_ticks)
-                if len(window_ticks) >= 2:
-                    entry["chainlink_outcome"] = "UP" if float(window_ticks[-1]["price"]) > float(window_ticks[0]["price"]) else "DOWN"
-            except Exception as e:
-                entry["chainlink_error"] = str(e)
-
-            # 2. Binance 5m
-            try:
-                from data_fetcher import get_binance_klines
-                df = get_binance_klines(symbol="BTCUSDT", interval="5m", start_time=ws, end_time=close_ms, limit=20)
-                entry["binance_5m_candles"] = len(df) if df is not None else 0
-                if df is not None and len(df) >= 2:
-                    op = float(df.iloc[0]["open"])
-                    cl = float(df.iloc[-1]["close"])
-                    entry["binance_5m_outcome"] = "UP" if cl > op else "DOWN"
-                    entry["binance_5m_open"] = op
-                    entry["binance_5m_close"] = cl
-            except Exception as e:
-                entry["binance_5m_error"] = str(e)
-
-            # 3. Full resolution attempt
-            try:
-                outcome = _resolve_via_chainlink_ticks(client, ws, close_ms)
-                entry["full_resolution"] = outcome
-            except Exception as e:
-                entry["full_resolution_error"] = str(e)
-
-        results.append(entry)
-
     return jsonify({
-        "total_unresolved": len(unresolved),
-        "tested": results,
+        "obs_total_rows": len(obs_all.data),
+        "obs_distinct_windows": len(obs_windows_raw),
+        "obs_sample_windows": sorted(obs_windows_raw)[:5],
+        "out_total_rows": len(out_all.data),
+        "out_distinct_windows": len(out_windows_raw),
+        "out_sample_windows": sorted(out_windows_raw)[:5],
+        "unresolved_raw_count": len(unresolved_raw),
+        "unresolved_raw_sample": unresolved_raw[:5],
+        "unresolved_func_count": len(unresolved_func),
+        "unresolved_func_sample": unresolved_func[:5],
         "now_ms": now_ms,
     })
 
