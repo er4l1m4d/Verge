@@ -86,7 +86,8 @@ CREATE TABLE IF NOT EXISTS signals (
     note TEXT,
     divergence_signal INTEGER DEFAULT 0,
     fear_greed_value NUMERIC,
-    mode TEXT NOT NULL DEFAULT 'safe'
+    mode TEXT NOT NULL DEFAULT 'safe',
+    price_source TEXT
 );
 
 CREATE TABLE IF NOT EXISTS paper_trades (
@@ -120,7 +121,9 @@ CREATE TABLE IF NOT EXISTS price_snapshots (
     source TEXT NOT NULL,
     symbol TEXT NOT NULL,
     timestamp_ms BIGINT NOT NULL,
-    price NUMERIC NOT NULL
+    price NUMERIC NOT NULL,
+    quality_note TEXT,
+    age_ms INTEGER
 );
 
 -- Indexes for query performance
@@ -206,6 +209,7 @@ class SignalRow:
     divergence_signal: int = 0
     fear_greed_value: int | None = None
     mode: str = "safe"
+    price_source: str | None = None
 
 
 @dataclass
@@ -225,11 +229,13 @@ class PaperTradeRow:
 
 @dataclass
 class PriceSnapshotRow:
-    """A price tick for Chainlink bar-building."""
+    """A price tick for bar-building or TWAP accumulation."""
     source: str
     symbol: str
     timestamp_ms: int
     price: float
+    quality_note: str | None = None
+    age_ms: int | None = None
 
 
 @dataclass
@@ -277,6 +283,7 @@ def write_signal(client: Client, row: SignalRow) -> int:
         "divergence_signal": row.divergence_signal,
         "fear_greed_value": row.fear_greed_value,
         "mode": row.mode,
+        "price_source": row.price_source,
     }
     result = client.table("signals").insert(data).execute()
     row_id = result.data[0]["id"]
@@ -318,15 +325,32 @@ def write_odds_snapshot(client: Client, token_id: str, price: float) -> int:
 
 
 def write_price_snapshot(client: Client, row: PriceSnapshotRow) -> int:
-    """Append a price tick for Chainlink bar-building. Returns inserted row ID."""
+    """Append a price tick for bar-building. Returns inserted row ID."""
     data = {
         "source": row.source,
         "symbol": row.symbol,
         "timestamp_ms": row.timestamp_ms,
         "price": row.price,
     }
+    if row.quality_note:
+        data["quality_note"] = row.quality_note
+    if row.age_ms is not None:
+        data["age_ms"] = row.age_ms
     result = client.table("price_snapshots").insert(data).execute()
     return result.data[0]["id"]
+
+
+def write_price_snapshot_sync(source: str, symbol: str, price: float,
+                               timestamp_ms: int, quality_note: str | None = None) -> int | None:
+    """Synchronous wrapper for write_price_snapshot — safe to call from background threads."""
+    try:
+        client = get_client()
+        row = PriceSnapshotRow(source=source, symbol=symbol, price=price,
+                               timestamp_ms=timestamp_ms, quality_note=quality_note)
+        return write_price_snapshot(client, row)
+    except Exception as e:
+        log.warning(f"write_price_snapshot_sync failed: {e}")
+        return None
 
 
 def log_window_observation(client: Client, row: WindowObservationRow) -> None:
@@ -960,3 +984,111 @@ def get_price_snapshots(
         query = query.gte("timestamp_ms", since_ms)
     result = query.limit(limit).execute()
     return result.data
+
+
+def get_recent_price_snapshots(
+    client: Client,
+    source: str,
+    symbol: str,
+    since_ms: int,
+    limit: int = 100,
+) -> list["PriceSnapshotRow"]:
+    """Get recent price ticks as PriceSnapshotRow objects for TWAP calculation."""
+    resp = (
+        client.table("price_snapshots")
+        .select("source,symbol,timestamp_ms,price")
+        .eq("source", source)
+        .eq("symbol", symbol)
+        .gte("timestamp_ms", since_ms)
+        .order("timestamp_ms", desc=False)
+        .limit(limit)
+        .execute()
+    )
+    return [PriceSnapshotRow(**r) for r in (resp.data or [])]
+
+
+def get_source_breakdown(client: Client, since_ms: int) -> list[dict]:
+    """Get average price and count per source for the last 24h."""
+    resp = (
+        client.table("price_snapshots")
+        .select("source,price")
+        .gte("timestamp_ms", since_ms)
+        .execute()
+    )
+    rows = resp.data or []
+    by_source: dict[str, list[float]] = {}
+    for r in rows:
+        src = r["source"]
+        by_source.setdefault(src, []).append(float(r["price"]))
+    return [
+        {"source": src, "avg_price": round(sum(prices) / len(prices), 2), "count": len(prices)}
+        for src, prices in sorted(by_source.items(), key=lambda x: -len(x[1]))
+    ]
+
+
+def get_recent_signals_with_source(client: Client, limit: int = 20) -> list[dict]:
+    """Get recent signals with their price source for diagnostics display."""
+    resp = (
+        client.table("signals")
+        .select("id,timestamp,decision,final_decision,current_price,price_source,strike_price,market_duration")
+        .order("id", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    return resp.data or []
+
+
+def get_resolution_accuracy_by_source(client: Client) -> list[dict]:
+    """Compare price_source against actual resolution to measure accuracy.
+
+    Joins signals with window_outcomes on window start + duration,
+    then groups by price_source to count agreements.
+    """
+    # Get all resolved signals with their outcomes
+    sig_resp = (
+        client.table("signals")
+        .select("market_window_start,market_duration,current_price,strike_price,price_source,final_decision")
+        .not_.is_("price_source", "null")
+        .order("id", desc=True)
+        .limit(500)
+        .execute()
+    )
+    signals = sig_resp.data or []
+    if not signals:
+        return []
+
+    # Get all window outcomes
+    out_resp = (
+        client.table("window_outcomes")
+        .select("market_duration,market_window_start,actual_outcome")
+        .execute()
+    )
+    outcomes = {(o["market_duration"], o["market_window_start"]): o["actual_outcome"]
+                for o in (out_resp.data or [])}
+
+    # Match and group by source
+    by_source: dict[str, dict] = {}
+    for sig in signals:
+        key = (sig["market_duration"], sig["market_window_start"])
+        actual = outcomes.get(key)
+        if actual is None:
+            continue
+        src = sig["price_source"] or "unknown"
+        if src not in by_source:
+            by_source[src] = {"total": 0, "agreements": 0}
+        by_source[src]["total"] += 1
+        # Agreement: signal direction matches actual outcome
+        if sig["final_decision"] == "BET HIGHER" and actual == "UP":
+            by_source[src]["agreements"] += 1
+        elif sig["final_decision"] == "BET LOWER" and actual == "DOWN":
+            by_source[src]["agreements"] += 1
+
+    return [
+        {
+            "source": src,
+            "total": stats["total"],
+            "agreements": stats["agreements"],
+            "accuracy_pct": round(stats["agreements"] / stats["total"] * 100, 1) if stats["total"] > 0 else 0,
+        }
+        for src, stats in sorted(by_source.items(), key=lambda x: -x[1]["total"])
+    ]

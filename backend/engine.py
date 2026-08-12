@@ -7,6 +7,7 @@ import os
 import sys
 import time
 import json
+import asyncio
 import logging
 import requests
 from dataclasses import dataclass
@@ -101,6 +102,7 @@ class LiveSignal:
     duration: str = "1h"
     divergence_signal: int = 0  # shadow mode: -1, 0, +1 (not in live score yet)
     fear_greed_value: int | None = None  # daily Fear & Greed index (0-100)
+    price_source: str | None = None
 
 
 def get_current_market(duration: str = "1h") -> dict | None:
@@ -530,23 +532,44 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
         suggested_price = round((1 - odds) * discount, 2)
 
     # Strike + current price (prefer Polymarket's official priceToBeat)
-    # 1. Polymarket WebSocket feed (Chainlink BTC price — same as Polymarket's UI)
-    ws_price = None
-    try:
-        import asyncio
-        from data_fetcher import get_polymarket_chainlink_price
-        ws_result = asyncio.get_event_loop().run_until_complete(
-            get_polymarket_chainlink_price(timeout_s=4.0)
-        )
-        if ws_result:
-            ws_price, _ = ws_result
-            log.info(f"[{duration}] WebSocket live price: ${ws_price:,.2f}")
-    except Exception as e:
-        log.debug(f"WebSocket price fetch failed (non-fatal): {e}")
+    # Price source chain: TWAP → Chainlink on-chain → Pyth → Coinbase spot → candle close
+    import db as _db
+    now_ms_val = int(time.time() * 1000)
+    recent_ticks = _db.get_recent_price_snapshots(
+        _db.get_client(), source="polymarket_ws_tick", symbol="BTCUSD",
+        since_ms=now_ms_val - 90_000,
+    )
+    twap_price = compute_twap(recent_ticks, window_end_ms=now_ms_val) if len(recent_ticks) >= 3 else None
 
-    # 2. CoinGecko spot → candle close fallback
-    spot = get_spot_price()
-    current_price = ws_price or spot or (float(df_price.iloc[-1]["close"]) if len(df_price) > 0 else None)
+    # 1. TWAP from accumulated Polymarket WS ticks (best: same source Polymarket resolves with)
+    if twap_price:
+        current_price, price_source = twap_price, "polymarket_ws_twap_60s"
+        log.info(f"[{duration}] TWAP price: ${twap_price:,.2f} (from {len(recent_ticks)} ticks)")
+    else:
+        # 2. Chainlink on-chain (direct contract read)
+        from chainlink_fetcher import get_chainlink_price
+        cl_price = get_chainlink_price()
+        if cl_price:
+            current_price, price_source = cl_price, "chainlink_onchain"
+            log.info(f"[{duration}] Chainlink on-chain price: ${cl_price:,.2f}")
+        else:
+            # 3. Pyth oracle (different network, independent cross-check)
+            from pyth_fetcher import get_pyth_btc_price_value
+            pyth_price = get_pyth_btc_price_value()
+            if pyth_price:
+                current_price, price_source = pyth_price, "pyth"
+                log.info(f"[{duration}] Pyth oracle price: ${pyth_price:,.2f}")
+            else:
+                # 4. Coinbase spot → candle close fallback
+                spot = get_spot_price()
+                if spot:
+                    current_price, price_source = spot, "coinbase_spot"
+                    log.info(f"[{duration}] Coinbase spot price: ${spot:,.2f}")
+                elif len(df_price) > 0:
+                    current_price, price_source = float(df_price.iloc[-1]["close"]), "candle_close"
+                    log.info(f"[{duration}] Candle close price: ${current_price:,.2f}")
+                else:
+                    current_price, price_source = None, None
 
     # Use Polymarket's official strike if available, else compute from candles
     strike_price = market.get("price_to_beat")
@@ -611,6 +634,7 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
         duration=duration,
         divergence_signal=div_val,
         fear_greed_value=fg_value,
+        price_source=price_source,
     )
 
 
@@ -658,6 +682,7 @@ def persist_signal(sig: LiveSignal) -> tuple[int | None, str]:
         divergence_signal=sig.divergence_signal,
         fear_greed_value=sig.fear_greed_value,
         mode=mode,
+        price_source=sig.price_source,
     ))
 
     # Write paper trade (only if not SKIP)
@@ -907,3 +932,87 @@ def _get_paper_trade_for_window(client, duration: str, window_start: int) -> dic
         .execute()
     )
     return result.data[0] if result.data else None
+
+
+# ── TWAP: Time-Weighted Average Price (Phase 3) ──────────────────────
+
+def compute_twap(ticks: list[dict], window_end_ms: int, window_seconds: int = 60) -> float | None:
+    """Compute a time-weighted average price over a sliding window.
+
+    ticks: [{'timestamp_ms': int, 'price': float}, ...], any order.
+    Time-weights each price by how long it was the 'current' price within
+    the window, correctly clipping the first tick's contribution if it
+    started before the window began.
+    """
+    window_start_ms = window_end_ms - (window_seconds * 1000)
+    ticks = sorted([t for t in ticks if t["timestamp_ms"] <= window_end_ms],
+                    key=lambda t: t["timestamp_ms"])
+    ticks = [t for t in ticks if t["timestamp_ms"] >= window_start_ms] or ticks[-1:]
+    if not ticks:
+        return None
+
+    weighted_sum, total_weight = 0.0, 0.0
+    for i, tick in enumerate(ticks):
+        seg_start = max(tick["timestamp_ms"], window_start_ms)
+        seg_end = ticks[i + 1]["timestamp_ms"] if i + 1 < len(ticks) else window_end_ms
+        duration = max(0, seg_end - seg_start)
+        weighted_sum += tick["price"] * duration
+        total_weight += duration
+
+    return weighted_sum / total_weight if total_weight > 0 else ticks[-1]["price"]
+
+
+def start_ws_tick_accumulator() -> None:
+    """Start a background thread that accumulates Polymarket WS ticks to price_snapshots.
+
+    Follows the same pattern as telegram.start_bot_listener(): a daemon thread
+    with automatic reconnect on failure. Writes every BTC tick to the
+    price_snapshots table tagged source='polymarket_ws_tick'.
+    """
+    import threading
+
+    def _run():
+        while True:
+            try:
+                asyncio.run(_accumulate_ticks())
+            except Exception as e:
+                log.warning(f"WS tick accumulator dropped, reconnecting: {e}")
+                time.sleep(5)
+
+    thread = threading.Thread(target=_run, daemon=True, name="ws-tick-accumulator")
+    thread.start()
+    log.info("WS tick accumulator started")
+
+
+async def _accumulate_ticks():
+    """Persistent WebSocket connection that writes every BTC tick to the DB."""
+    import asyncio
+    import json
+    import websockets
+    import db
+
+    url = "wss://ws-live-data.polymarket.com"
+    async with websockets.connect(url, open_timeout=10) as ws:
+        await ws.send(json.dumps({
+            "action": "subscribe",
+            "subscriptions": [{"topic": "crypto_prices_chainlink", "type": "*", "filters": ""}],
+        }))
+        log.info("WS tick accumulator connected, listening for BTC ticks")
+        async for raw in ws:
+            data = json.loads(raw)
+            if data.get("topic") != "crypto_prices_chainlink":
+                continue
+            payload = data.get("payload") or {}
+            symbol = str(payload.get("symbol") or payload.get("pair") or "").lower()
+            if "btc" not in symbol:
+                continue
+            price = payload.get("value") or payload.get("price")
+            ts = payload.get("timestamp") or payload.get("updatedAt")
+            if price is not None:
+                ts_ms = int(float(ts) * 1000) if ts else int(time.time() * 1000)
+                db.write_price_snapshot_sync(
+                    source="polymarket_ws_tick",
+                    symbol="BTCUSD",
+                    price=float(price),
+                    timestamp_ms=ts_ms,
+                )

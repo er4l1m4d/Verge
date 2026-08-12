@@ -1545,6 +1545,167 @@
     color: var(--static);
     font-size: 10px;
   }
+
+  /* Diagnostics Page */
+  .diagnostics-page {
+    display: none;
+  }
+  .diagnostics-page.active {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    background: var(--bg);
+    width: 100vw;
+    margin-left: calc(-50vw + 50%);
+    overflow-x: hidden;
+  }
+  .diagnostics-inner {
+    max-width: 960px;
+    width: 100%;
+    margin: 0 auto;
+    padding: 0 20px 40px;
+    box-sizing: border-box;
+  }
+  .diag-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    margin-bottom: 16px;
+  }
+  .diag-back {
+    background: none;
+    border: 1px solid rgba(255,255,255,0.12);
+    color: var(--chalk);
+    padding: 4px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: var(--font-sans);
+    font-size: 12px;
+  }
+  .diag-back:hover { border-color: rgba(255,255,255,0.25); }
+  .diag-title {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--chalk);
+    letter-spacing: 0.5px;
+  }
+  .diag-section {
+    margin-bottom: 24px;
+  }
+  .diag-section-title {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--cost-amber);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+  .diag-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  .diag-table th {
+    text-align: left;
+    font-size: 10px;
+    color: var(--static);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    padding: 8px 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    font-weight: 500;
+  }
+  .diag-table td {
+    padding: 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--chalk);
+    font-variant-numeric: tabular-nums;
+  }
+  .diag-table tr:hover { background: rgba(255,255,255,0.02); }
+  .diag-table .source-primary { color: var(--cost-amber); font-weight: 500; }
+  .diag-kv {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .diag-kv-item {
+    padding: 10px 12px;
+    background: var(--panel);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 6px;
+  }
+  .diag-kv-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--static);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+  }
+  .diag-kv-value {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    color: var(--chalk);
+    font-variant-numeric: tabular-nums;
+  }
+  .diag-kv-value.active { color: var(--signal-up); }
+  .diag-kv-value.fallback { color: var(--static); }
+  .diag-twap-compare {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    padding: 12px 16px;
+    background: var(--panel);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 6px;
+  }
+  .diag-twap-compare .val {
+    font-family: var(--font-mono);
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--chalk);
+  }
+  .diag-twap-compare .label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--static);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .diag-twap-compare .diff {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    padding: 3px 8px;
+    border-radius: 4px;
+  }
+  .diag-twap-compare .diff.ok { background: rgba(51,193,126,0.15); color: var(--signal-up); }
+  .diag-twap-compare .diff.warn { background: rgba(214,165,68,0.15); color: var(--cost-amber); }
+  .diag-source-tag {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-family: var(--font-mono);
+    letter-spacing: 0.3px;
+  }
+  .diag-source-tag.twap { background: rgba(214,165,68,0.15); color: var(--cost-amber); }
+  .diag-source-tag.chainlink { background: rgba(0,229,255,0.12); color: #00E5FF; }
+  .diag-source-tag.pyth { background: rgba(139,92,246,0.15); color: #8B5CF6; }
+  .diag-source-tag.coinbase { background: rgba(51,193,126,0.12); color: var(--signal-up); }
+  .diag-source-tag.candle { background: rgba(255,255,255,0.06); color: var(--static); }
+  .diag-empty {
+    padding: 24px;
+    text-align: center;
+    color: var(--static);
+    font-family: var(--font-mono);
+    font-size: 12px;
+  }
 </style>
 </head>
 <body>
@@ -1693,6 +1854,27 @@
       <button class="active" data-series="rsi" onclick="toggleTimelineSeries('rsi', this)">RSI</button>
     </div>
     <div class="timeline-status" id="timeline-status"></div>
+  </div>
+</div>
+
+<!-- Diagnostics Page (hidden by default) -->
+<div class="diagnostics-page" id="diagnostics-page">
+  <div class="diagnostics-inner">
+    <div class="status-band">
+      <div class="status-wordmark">VERGE</div>
+      <div class="status-right">
+        <div class="status-asset">BTC</div>
+        <div class="status-live">
+          <div class="heartbeat-dot"></div>
+          <span>live</span>
+        </div>
+      </div>
+    </div>
+    <div class="diag-header">
+      <button class="diag-back" id="diag-back">&larr; Dashboard</button>
+      <span class="diag-title">Price Source Diagnostics</span>
+    </div>
+    <div id="diag-content"><div style="display:flex;align-items:center;justify-content:center;padding:24px;color:var(--static);font-family:var(--font-mono);font-size:12px;letter-spacing:0.5px;">Loading diagnostics<span class="loading-dots"><span>.</span><span>.</span><span>.</span></span></div></div>
   </div>
 </div>
 
@@ -2153,6 +2335,7 @@ function renderDashboard(signal, stats, performance) {
           <button id="dur-15m" onclick="setDuration('15m')">15M</button>
         </div>
         <button class="timeline-btn" id="timeline-btn" onclick="showTimelinePage()" title="Window Timeline" style="background:none;border:1px solid rgba(255,255,255,0.12);color:var(--muted);padding:4px 10px;border-radius:4px;cursor:pointer;font-family:var(--font-mono);font-size:11px;letter-spacing:0.5px;">Timeline</button>
+        <button class="timeline-btn" id="diag-btn" onclick="showDiagnosticsPage()" title="Price Source Diagnostics" style="background:none;border:1px solid rgba(255,255,255,0.12);color:var(--muted);padding:4px 10px;border-radius:4px;cursor:pointer;font-family:var(--font-mono);font-size:11px;letter-spacing:0.5px;">Diagnostics</button>
         <div id="fear-greed-badge" class="status-badge" style="display:none">F&G: <span id="fear-greed-value">—</span></div>
         <div class="status-live">
           <div class="heartbeat-dot" id="heartbeat-dot"></div>
@@ -3188,10 +3371,106 @@ function drawTimeline() {
   ctx.fillText('Signal', toX(0) + 4, pad.top + 10);
 }
 
+// --- Diagnostics Page ---
+function showDiagnosticsPage() {
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('signal-log-page').classList.remove('active');
+  document.getElementById('timeline-page').classList.remove('active');
+  document.getElementById('diagnostics-page').classList.add('active');
+  document.querySelector('.footer').style.display = 'none';
+  loadDiagnostics();
+}
+
+function hideDiagnosticsPage() {
+  document.getElementById('app').style.display = '';
+  document.getElementById('diagnostics-page').classList.remove('active');
+  document.querySelector('.footer').style.display = '';
+}
+
+function sourceTag(src) {
+  if (!src) return '<span class="diag-source-tag candle">unknown</span>';
+  const cls = src.includes('twap') ? 'twap' : src.includes('chainlink') ? 'chainlink'
+    : src.includes('pyth') ? 'pyth' : src.includes('coinbase') ? 'coinbase' : 'candle';
+  return `<span class="diag-source-tag ${cls}">${src}</span>`;
+}
+
+function fmtPrice(v) { return v != null ? '$' + Number(v).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '—'; }
+
+async function loadDiagnostics() {
+  const el = document.getElementById('diag-content');
+  el.innerHTML = loadingHTML('Loading diagnostics');
+  try {
+    const res = await fetch(`${API_BASE}/api/diagnostics`, { headers: authHeaders() });
+    const d = await res.json();
+
+    // 1. Source Breakdown
+    const srcRows = (d.source_breakdown || []).map(s =>
+      `<tr><td class="${s.source.includes('twap') ? 'source-primary' : ''}">${s.source}</td><td>${fmtPrice(s.avg_price)}</td><td>${s.count.toLocaleString()}</td></tr>`
+    ).join('') || '<tr><td colspan="3" class="diag-empty">No price data yet</td></tr>';
+
+    // 2. Live Prices
+    const live = d.live_prices || {};
+    const liveKeys = ['polymarket_ws_twap_60s', 'chainlink_onchain', 'pyth', 'coinbase_spot'];
+    const liveLabels = {'polymarket_ws_twap_60s': 'TWAP 60s', 'chainlink_onchain': 'Chainlink', 'pyth': 'Pyth', 'coinbase_spot': 'Coinbase'};
+    const liveHTML = liveKeys.map(k => {
+      const v = live[k];
+      const isActive = k === 'polymarket_ws_twap_60s' && v != null;
+      return `<div class="diag-kv-item"><div class="diag-kv-label">${liveLabels[k]}</div><div class="diag-kv-value ${isActive ? 'active' : v != null ? '' : 'fallback'}">${fmtPrice(v)}</div></div>`;
+    }).join('');
+
+    // 3. Recent Signals
+    const sigRows = (d.recent_signals || []).map(s => {
+      const t = s.timestamp ? new Date(s.timestamp).toLocaleString('en-US', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZone:'America/New_York'}) : '—';
+      return `<tr onclick="openSignalModal(${s.id})" style="cursor:pointer"><td>${t}</td><td>${s.market_duration || '1h'}</td><td>${s.final_decision || s.decision}</td><td>${fmtPrice(s.current_price)}</td><td>${sourceTag(s.price_source)}</td><td>${fmtPrice(s.strike_price)}</td></tr>`;
+    }).join('') || '<tr><td colspan="6" class="diag-empty">No signals yet</td></tr>';
+
+    // 4. Resolution Accuracy
+    const accRows = (d.resolution_accuracy || []).map(a =>
+      `<tr><td>${sourceTag(a.source)}</td><td>${a.total}</td><td>${a.agreements}</td><td>${a.accuracy_pct}%</td></tr>`
+    ).join('') || '<tr><td colspan="4" class="diag-empty">No resolved signals yet</td></tr>';
+
+    // 5. TWAP vs Tick
+    const tv = d.twap_vs_tick || {};
+    const diffPct = tv.difference_pct;
+    const diffClass = diffPct != null ? (diffPct < 0.1 ? 'ok' : 'warn') : '';
+    const diffHTML = diffPct != null ? `<span class="diff ${diffClass}">${diffPct.toFixed(4)}%</span>` : '<span class="diff">—</span>';
+
+    el.innerHTML = `
+      <div class="diag-section">
+        <div class="diag-section-title">Live Prices</div>
+        <div class="diag-kv">${liveHTML}</div>
+      </div>
+      <div class="diag-section">
+        <div class="diag-section-title">TWAP vs Single Tick</div>
+        <div class="diag-twap-compare">
+          <div><div class="label">TWAP</div><div class="val">${fmtPrice(tv.twap)}</div></div>
+          <div><div class="label">Last Tick</div><div class="val">${fmtPrice(tv.last_single_tick)}</div></div>
+          ${diffHTML}
+        </div>
+      </div>
+      <div class="diag-section">
+        <div class="diag-section-title">Source Breakdown (24h)</div>
+        <table class="diag-table"><thead><tr><th>Source</th><th>Avg Price</th><th>Count</th></tr></thead><tbody>${srcRows}</tbody></table>
+      </div>
+      <div class="diag-section">
+        <div class="diag-section-title">Resolution Accuracy</div>
+        <table class="diag-table"><thead><tr><th>Source</th><th>Total</th><th>Agreements</th><th>Accuracy</th></tr></thead><tbody>${accRows}</tbody></table>
+      </div>
+      <div class="diag-section">
+        <div class="diag-section-title">Recent Signals</div>
+        <table class="diag-table"><thead><tr><th>Time</th><th>Duration</th><th>Signal</th><th>Price</th><th>Source</th><th>Strike</th></tr></thead><tbody>${sigRows}</tbody></table>
+      </div>
+    `;
+  } catch (e) {
+    el.innerHTML = `<div class="diag-empty">Failed to load diagnostics: ${e.message}</div>`;
+  }
+}
+
 // Event listeners
 document.getElementById('log-back')?.addEventListener('click', hideSignalLogPage);
 document.getElementById('view-all-link')?.addEventListener('click', showSignalLogPage);
 document.getElementById('timeline-back')?.addEventListener('click', hideTimelinePage);
+document.getElementById('diag-back')?.addEventListener('click', hideDiagnosticsPage);
 document.getElementById('signal-modal')?.addEventListener('click', (e) => {
   if (e.target.id === 'signal-modal') closeSignalModal();
 });

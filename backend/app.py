@@ -17,7 +17,7 @@ from functools import wraps
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from engine import generate_signal, persist_signal, resolve_previous_hour, record_price_tick
+from engine import generate_signal, persist_signal, resolve_previous_hour, record_price_tick, start_ws_tick_accumulator
 from telegram import alert_on_signal, send_hourly_summary, start_bot_listener
 
 app = Flask(__name__)
@@ -25,6 +25,7 @@ app = Flask(__name__)
 # Start Telegram bot listener for /start commands (once, primary worker only)
 if os.environ.get("WEB_CONCURRENCY", "1") == "1":
     start_bot_listener()
+    start_ws_tick_accumulator()
 
 # CORS: restrict to Vercel frontend in production, allow all in dev
 VERCEL_URL = os.environ.get("VERCEL_URL", "")
@@ -697,6 +698,59 @@ def window_outcomes_recent():
     except Exception as e:
         log.warning(f"window_outcomes_recent failed: {e}")
         return jsonify([])
+
+
+@app.route("/api/diagnostics", methods=["GET"])
+@require_secret
+def api_diagnostics():
+    """Diagnostics endpoint: source breakdown, live prices, recent signals, accuracy, TWAP vs tick."""
+    import time as _time
+    import db
+    from engine import compute_twap
+    from chainlink_fetcher import get_chainlink_price
+    from pyth_fetcher import get_pyth_btc_price_value
+    from data_fetcher import get_spot_price
+
+    now_ms = int(_time.time() * 1000)
+    client = db.get_client()
+
+    # 1. Source breakdown (last 24h)
+    source_stats = db.get_source_breakdown(client, since_ms=now_ms - 86_400_000)
+
+    # 2. Live prices from each source
+    twap_ticks = db.get_recent_price_snapshots(client, "polymarket_ws_tick", "BTCUSD",
+                                                since_ms=now_ms - 90_000)
+    live = {
+        "polymarket_ws_twap_60s": compute_twap(twap_ticks, now_ms) if len(twap_ticks) >= 3 else None,
+        "chainlink_onchain": get_chainlink_price(),
+        "pyth": get_pyth_btc_price_value(),
+        "coinbase_spot": get_spot_price(),
+    }
+
+    # 3. Recent signals with source
+    recent_signals = db.get_recent_signals_with_source(client, limit=20)
+
+    # 4. Resolution accuracy by source
+    accuracy = db.get_resolution_accuracy_by_source(client)
+
+    # 5. TWAP vs single-tick comparison
+    last_tick = twap_ticks[-1].price if twap_ticks else None
+    twap_val = live["polymarket_ws_twap_60s"]
+    twap_vs_tick = {
+        "twap": twap_val,
+        "last_single_tick": last_tick,
+        "difference_pct": round(abs(twap_val - last_tick) / last_tick * 100, 4)
+            if twap_val and last_tick else None,
+    }
+
+    return jsonify({
+        "source_breakdown": source_stats,
+        "live_prices": live,
+        "recent_signals": recent_signals,
+        "resolution_accuracy": accuracy,
+        "twap_vs_tick": twap_vs_tick,
+        "timestamp": now_ms,
+    })
 
 
 if __name__ == "__main__":
