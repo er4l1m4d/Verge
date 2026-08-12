@@ -2888,7 +2888,7 @@ async function loadPhase2Progress() {
   const el = document.getElementById('timeline-phase2-progress');
   if (!el) return;
   try {
-    const res = await fetch(`${API}/api/phase2-progress`, { headers: { 'X-Secret': SECRET } });
+    const res = await fetch(`${API_BASE}/api/phase2-progress`, { headers: authHeaders() });
     const data = await res.json();
     const total = data.total || { resolved: 0, target: 300 };
     const pct = Math.min(100, Math.round((total.resolved / total.target) * 100));
@@ -2910,6 +2910,7 @@ async function loadPhase2Progress() {
       </div>
     `;
   } catch (e) {
+    console.warn('Phase 2 progress load failed:', e);
     el.innerHTML = '';
   }
 }
