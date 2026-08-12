@@ -2890,22 +2890,20 @@ async function loadPhase2Progress() {
   try {
     const res = await fetch(`${API_BASE}/api/phase2-progress`, { headers: authHeaders() });
     const data = await res.json();
-    const total = data.total || { resolved: 0, target: 300 };
-    const pct = Math.min(100, Math.round((total.resolved / total.target) * 100));
+    const resolved = data.resolved || 0;
+    const target = data.target || 300;
+    const pct = Math.min(100, Math.round((resolved / target) * 100));
     const complete = pct >= 100;
-    const c15 = data['15m'] || { resolved: 0 };
-    const c1h = data['1h'] || { resolved: 0 };
     el.innerHTML = `
       <div class="phase2-bar-label">
         <span>Phase 2 Data</span>
-        <span class="phase2-count">${total.resolved}/${total.target} windows</span>
+        <span class="phase2-count">${resolved}/${target} windows</span>
       </div>
       <div class="phase2-bar-track">
         <div class="phase2-bar-fill${complete ? ' complete' : ''}" style="width:${pct}%"></div>
       </div>
       <div class="phase2-bar-durations">
-        <span>15m: ${c15.resolved}</span>
-        <span>1h: ${c1h.resolved}</span>
+        <span>15m resolved windows</span>
         <span>${pct}%</span>
       </div>
     `;
