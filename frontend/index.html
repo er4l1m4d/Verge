@@ -115,6 +115,61 @@
     50% { opacity: 0.4; }
   }
 
+  /* --- Hamburger Nav Menu --- */
+  .nav-menu {
+    position: relative;
+  }
+  .hamburger-btn {
+    background: none;
+    border: 1px solid rgba(255,255,255,0.12);
+    color: var(--muted);
+    padding: 5px 7px;
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+  }
+  .hamburger-btn:hover {
+    border-color: rgba(255,255,255,0.25);
+    color: var(--chalk);
+  }
+  .hamburger-btn.open {
+    border-color: rgba(255,255,255,0.25);
+    color: var(--chalk);
+  }
+  .nav-dropdown {
+    display: none;
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    background: var(--deck);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 6px;
+    padding: 4px 0;
+    min-width: 140px;
+    z-index: 1000;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  }
+  .nav-dropdown.open { display: block; }
+  .nav-dropdown-item {
+    display: block;
+    width: 100%;
+    background: none;
+    border: none;
+    color: var(--chalk);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    padding: 8px 14px;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .nav-dropdown-item:hover {
+    background: rgba(255,255,255,0.06);
+  }
+
   /* --- Duration Toggle --- */
   .duration-toggle {
     display: flex;
@@ -2334,8 +2389,20 @@ function renderDashboard(signal, stats, performance) {
           <span class="freeze-lock" data-duration="1h" onclick="toggleFreeze('1h')" title="Freeze 1H">${frozenDurations.has('1h') ? '\uD83D\uDD12' : '\uD83D\uDD13'}</span>
           <button id="dur-15m" onclick="setDuration('15m')">15M</button>
         </div>
-        <button class="timeline-btn" id="timeline-btn" onclick="showTimelinePage()" title="Window Timeline" style="background:none;border:1px solid rgba(255,255,255,0.12);color:var(--muted);padding:4px 10px;border-radius:4px;cursor:pointer;font-family:var(--font-mono);font-size:11px;letter-spacing:0.5px;">Timeline</button>
-        <button class="timeline-btn" id="diag-btn" onclick="showDiagnosticsPage()" title="Price Source Diagnostics" style="background:none;border:1px solid rgba(255,255,255,0.12);color:var(--muted);padding:4px 10px;border-radius:4px;cursor:pointer;font-family:var(--font-mono);font-size:11px;letter-spacing:0.5px;">Diagnostics</button>
+        <div class="nav-menu" id="nav-menu">
+          <button class="hamburger-btn" id="hamburger-btn" onclick="toggleNavMenu()" title="Navigation">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+              <line x1="2" y1="4" x2="14" y2="4"/>
+              <line x1="2" y1="8" x2="14" y2="8"/>
+              <line x1="2" y1="12" x2="14" y2="12"/>
+            </svg>
+          </button>
+          <div class="nav-dropdown" id="nav-dropdown">
+            <button class="nav-dropdown-item" onclick="showSignalLogPage(); closeNavMenu();">Signal Log</button>
+            <button class="nav-dropdown-item" onclick="showTimelinePage(); closeNavMenu();">Timeline</button>
+            <button class="nav-dropdown-item" onclick="showDiagnosticsPage(); closeNavMenu();">Diagnostics</button>
+          </div>
+        </div>
         <div id="fear-greed-badge" class="status-badge" style="display:none">F&G: <span id="fear-greed-value">—</span></div>
         <div class="status-live">
           <div class="heartbeat-dot" id="heartbeat-dot"></div>
@@ -3473,6 +3540,22 @@ document.getElementById('timeline-back')?.addEventListener('click', hideTimeline
 document.getElementById('diag-back')?.addEventListener('click', hideDiagnosticsPage);
 document.getElementById('signal-modal')?.addEventListener('click', (e) => {
   if (e.target.id === 'signal-modal') closeSignalModal();
+});
+
+// --- Hamburger Nav Menu ---
+function toggleNavMenu() {
+  const dd = document.getElementById('nav-dropdown');
+  const btn = document.getElementById('hamburger-btn');
+  const isOpen = dd.classList.contains('open');
+  if (isOpen) { closeNavMenu(); } else { dd.classList.add('open'); btn.classList.add('open'); }
+}
+function closeNavMenu() {
+  document.getElementById('nav-dropdown')?.classList.remove('open');
+  document.getElementById('hamburger-btn')?.classList.remove('open');
+}
+document.addEventListener('click', (e) => {
+  const menu = document.getElementById('nav-menu');
+  if (menu && !menu.contains(e.target)) closeNavMenu();
 });
 </script>
 
