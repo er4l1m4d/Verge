@@ -3439,6 +3439,9 @@ function drawTimeline() {
 }
 
 // --- Diagnostics Page ---
+let diagSignalsData = [];
+let diagDurationFilter = 'all'; // 'all' | '1h' | '15m'
+
 function showDiagnosticsPage() {
   document.getElementById('app').style.display = 'none';
   document.getElementById('signal-log-page').classList.remove('active');
@@ -3452,6 +3455,22 @@ function hideDiagnosticsPage() {
   document.getElementById('app').style.display = '';
   document.getElementById('diagnostics-page').classList.remove('active');
   document.querySelector('.footer').style.display = '';
+}
+
+function filterDiagSignals(dur) {
+  diagDurationFilter = dur;
+  document.querySelectorAll('#diag-dur-toggle button').forEach(b => b.classList.toggle('active', b.dataset.dur === dur));
+  renderDiagSignals();
+}
+
+function renderDiagSignals() {
+  const filtered = diagDurationFilter === 'all' ? diagSignalsData : diagSignalsData.filter(s => (s.market_duration || '1h') === diagDurationFilter);
+  const tbody = document.getElementById('diag-signals-tbody');
+  if (!tbody) return;
+  tbody.innerHTML = filtered.map(s => {
+    const t = s.timestamp ? new Date(s.timestamp).toLocaleString('en-US', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZone:'America/New_York'}) : '—';
+    return `<tr onclick="openSignalModal(${s.id})" style="cursor:pointer"><td>${t}</td><td>${s.market_duration || '1h'}</td><td>${s.final_decision || s.decision}</td><td>${fmtPrice(s.current_price)}</td><td>${sourceTag(s.price_source)}</td><td>${fmtPrice(s.strike_price)}</td></tr>`;
+  }).join('') || '<tr><td colspan="6" class="diag-empty">No signals for this duration</td></tr>';
 }
 
 function sourceTag(src) {
@@ -3486,7 +3505,9 @@ async function loadDiagnostics() {
     }).join('');
 
     // 3. Recent Signals
-    const sigRows = (d.recent_signals || []).map(s => {
+    diagSignalsData = d.recent_signals || [];
+    diagDurationFilter = 'all';
+    const sigRows = diagSignalsData.map(s => {
       const t = s.timestamp ? new Date(s.timestamp).toLocaleString('en-US', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZone:'America/New_York'}) : '—';
       return `<tr onclick="openSignalModal(${s.id})" style="cursor:pointer"><td>${t}</td><td>${s.market_duration || '1h'}</td><td>${s.final_decision || s.decision}</td><td>${fmtPrice(s.current_price)}</td><td>${sourceTag(s.price_source)}</td><td>${fmtPrice(s.strike_price)}</td></tr>`;
     }).join('') || '<tr><td colspan="6" class="diag-empty">No signals yet</td></tr>';
@@ -3524,8 +3545,15 @@ async function loadDiagnostics() {
         <table class="diag-table"><thead><tr><th>Source</th><th>Total</th><th>Agreements</th><th>Accuracy</th></tr></thead><tbody>${accRows}</tbody></table>
       </div>
       <div class="diag-section">
-        <div class="diag-section-title">Recent Signals</div>
-        <table class="diag-table"><thead><tr><th>Time</th><th>Duration</th><th>Signal</th><th>Price</th><th>Source</th><th>Strike</th></tr></thead><tbody>${sigRows}</tbody></table>
+        <div class="diag-section-title" style="display:flex;align-items:center;gap:12px;">
+          Recent Signals
+          <div class="log-view-toggle" id="diag-dur-toggle">
+            <button data-dur="all" class="active" onclick="filterDiagSignals('all')">All</button>
+            <button data-dur="1h" onclick="filterDiagSignals('1h')">1H</button>
+            <button data-dur="15m" onclick="filterDiagSignals('15m')">15M</button>
+          </div>
+        </div>
+        <table class="diag-table"><thead><tr><th>Time</th><th>Duration</th><th>Signal</th><th>Price</th><th>Source</th><th>Strike</th></tr></thead><tbody id="diag-signals-tbody">${sigRows}</tbody></table>
       </div>
     `;
   } catch (e) {
