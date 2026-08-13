@@ -3441,6 +3441,7 @@ function drawTimeline() {
 // --- Diagnostics Page ---
 let diagSignalsData = [];
 let diagDurationFilter = 'all'; // 'all' | '1h' | '15m'
+let diagDecisionFilter = 'bet'; // 'all' | 'bet' | 'skip'
 
 function showDiagnosticsPage() {
   document.getElementById('app').style.display = 'none';
@@ -3463,8 +3464,17 @@ function filterDiagSignals(dur) {
   renderDiagSignals();
 }
 
+function filterDiagDecision(mode) {
+  diagDecisionFilter = mode;
+  document.querySelectorAll('#diag-decision-toggle button').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+  renderDiagSignals();
+}
+
 function renderDiagSignals() {
-  const filtered = diagDurationFilter === 'all' ? diagSignalsData : diagSignalsData.filter(s => (s.market_duration || '1h') === diagDurationFilter);
+  let filtered = diagSignalsData;
+  if (diagDurationFilter !== 'all') filtered = filtered.filter(s => (s.market_duration || '1h') === diagDurationFilter);
+  if (diagDecisionFilter === 'bet') filtered = filtered.filter(s => s.final_decision === 'BET HIGHER' || s.final_decision === 'BET LOWER');
+  else if (diagDecisionFilter === 'skip') filtered = filtered.filter(s => s.final_decision === 'SKIP');
   const tbody = document.getElementById('diag-signals-tbody');
   if (!tbody) return;
   tbody.innerHTML = filtered.map(s => {
@@ -3507,7 +3517,8 @@ async function loadDiagnostics() {
     // 3. Recent Signals
     diagSignalsData = d.recent_signals || [];
     diagDurationFilter = 'all';
-    const sigRows = diagSignalsData.map(s => {
+    diagDecisionFilter = 'bet';
+    const sigRows = diagSignalsData.filter(s => s.final_decision === 'BET HIGHER' || s.final_decision === 'BET LOWER').map(s => {
       const t = s.timestamp ? new Date(s.timestamp).toLocaleString('en-US', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZone:'America/New_York'}) : '—';
       return `<tr onclick="openSignalModal(${s.id})" style="cursor:pointer"><td>${t}</td><td>${s.market_duration || '1h'}</td><td>${s.final_decision || s.decision}</td><td>${fmtPrice(s.current_price)}</td><td>${sourceTag(s.price_source)}</td><td>${fmtPrice(s.strike_price)}</td></tr>`;
     }).join('') || '<tr><td colspan="6" class="diag-empty">No signals yet</td></tr>';
@@ -3577,6 +3588,11 @@ async function loadDiagnostics() {
             <button data-dur="all" class="active" onclick="filterDiagSignals('all')">All</button>
             <button data-dur="1h" onclick="filterDiagSignals('1h')">1H</button>
             <button data-dur="15m" onclick="filterDiagSignals('15m')">15M</button>
+          </div>
+          <div class="log-view-toggle" id="diag-decision-toggle">
+            <button data-mode="all" onclick="filterDiagDecision('all')">All</button>
+            <button data-mode="bet" class="active" onclick="filterDiagDecision('bet')">BET</button>
+            <button data-mode="skip" onclick="filterDiagDecision('skip')">SKIP</button>
           </div>
         </div>
         <table class="diag-table"><thead><tr><th>Time</th><th>Duration</th><th>Signal</th><th>Price</th><th>Source</th><th>Strike</th></tr></thead><tbody id="diag-signals-tbody">${sigRows}</tbody></table>

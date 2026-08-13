@@ -17,7 +17,7 @@ from functools import wraps
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from engine import generate_signal, persist_signal, resolve_previous_hour, record_price_tick, start_ws_tick_accumulator
+from engine import generate_signal, persist_signal, resolve_previous_hour, record_price_tick, record_polymarket_ws_tick, start_ws_tick_accumulator
 from telegram import alert_on_signal, send_hourly_summary, start_bot_listener
 
 app = Flask(__name__)
@@ -356,6 +356,12 @@ def heartbeat():
                         record_price_tick(duration=dur)
                     except Exception as e:
                         log.warning(f"Price tick recording failed for {dur} (non-fatal): {e}")
+
+                # Record Polymarket WS tick (fallback for accumulator thread)
+                try:
+                    record_polymarket_ws_tick()
+                except Exception as e:
+                    log.debug(f"Polymarket WS tick failed for {dur} (non-fatal): {e}")
 
                 # Telegram alert (only on new signal or persist failure)
                 if persist_status == "duplicate":

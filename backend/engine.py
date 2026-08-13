@@ -753,6 +753,40 @@ def record_price_tick(duration: str = "15m") -> bool:
         return False
 
 
+def record_polymarket_ws_tick() -> bool:
+    """Fetch Polymarket WS price and write as a tick (heartbeat fallback for accumulator).
+
+    Uses the short-lived WebSocket connection that already works for signal generation.
+    Writes to price_snapshots with source='polymarket_ws_tick' for TWAP calculation.
+    Called on every heartbeat as a reliable fallback when the persistent accumulator
+    thread fails (e.g. on free hosting tiers that kill long-lived connections).
+
+    Returns True if a tick was written, False on failure.
+    """
+    try:
+        import asyncio
+        from data_fetcher import get_polymarket_chainlink_price
+        import db
+
+        result = asyncio.get_event_loop().run_until_complete(
+            get_polymarket_chainlink_price(timeout_s=4.0)
+        )
+        if result:
+            price, ts = result
+            ts_ms = ts if ts else int(time.time() * 1000)
+            db.write_price_snapshot_sync(
+                source="polymarket_ws_tick",
+                symbol="BTCUSD",
+                price=float(price),
+                timestamp_ms=ts_ms,
+            )
+            log.info(f"Recorded Polymarket WS tick: ${price:,.2f}")
+            return True
+    except Exception as e:
+        log.debug(f"Polymarket WS tick record failed (non-fatal): {e}")
+    return False
+
+
 def resolve_previous_hour(duration: str = "1h") -> bool:
     """5.3 + Phase 7.2c — Resolution checker (duration-aware).
 

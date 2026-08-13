@@ -1079,6 +1079,9 @@ def get_resolution_accuracy_by_source(client: Client) -> list[dict]:
     # Match and group by source
     by_source: dict[str, dict] = {}
     for sig in signals:
+        # Only count directional decisions — SKIP has no direction to be right or wrong
+        if sig["final_decision"] not in ("BET HIGHER", "BET LOWER"):
+            continue
         key = (sig["market_duration"], sig["market_window_start"])
         actual = outcomes.get(key)
         if actual is None:
