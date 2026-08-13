@@ -103,6 +103,7 @@ class LiveSignal:
     divergence_signal: int = 0  # shadow mode: -1, 0, +1 (not in live score yet)
     fear_greed_value: int | None = None  # daily Fear & Greed index (0-100)
     price_source: str | None = None
+    condition_id: str | None = None
 
 
 def get_current_market(duration: str = "1h") -> dict | None:
@@ -209,6 +210,7 @@ def get_current_market(duration: str = "1h") -> dict | None:
                     "duration": duration,
                     "price_to_beat": price_to_beat,
                     "up_odds": up_odds,
+                    "condition_id": market.get("conditionId"),
                     # Backward compat — engine.py still uses these names
                     "hour_open_time": start_ms,
                     "hour_end_time": end_ms,
@@ -439,6 +441,7 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
 
     token_id = market["token_id"]
     slug = market["slug"]
+    condition_id = market.get("condition_id")
     hour_open_time = market.get("hour_open_time")
     hour_end_time = market.get("hour_end_time")
 
@@ -635,6 +638,7 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
         divergence_signal=div_val,
         fear_greed_value=fg_value,
         price_source=price_source,
+        condition_id=condition_id,
     )
 
 
@@ -683,6 +687,7 @@ def persist_signal(sig: LiveSignal) -> tuple[int | None, str]:
         fear_greed_value=sig.fear_greed_value,
         mode=mode,
         price_source=sig.price_source,
+        condition_id=sig.condition_id,
     ))
 
     # Write paper trade (only if not SKIP)
@@ -802,8 +807,42 @@ def resolve_previous_hour(duration: str = "1h") -> bool:
             if outcome is None:
                 continue  # not enough data yet, retry next heartbeat
 
+            # Validate against Polymarket's official resolution (best-effort)
+            official_outcome = None
+            try:
+                sig_resp = (
+                    client.table("signals")
+                    .select("condition_id")
+                    .eq("market_window_start", window_start)
+                    .eq("market_duration", duration)
+                    .not_.is_("condition_id", "null")
+                    .limit(1)
+                    .execute()
+                )
+                sig_rows = sig_resp.data or []
+                if sig_rows:
+                    cid = sig_rows[0].get("condition_id")
+                    if cid:
+                        from polymarket_fetcher import get_polymarket_resolution
+                        pm = get_polymarket_resolution(cid)
+                        if pm:
+                            official_outcome = pm["outcome"]
+                            if official_outcome != outcome:
+                                log.warning(
+                                    f"Resolution MISMATCH window={window_start} duration={duration}: "
+                                    f"Verge={outcome} Polymarket={official_outcome}"
+                                )
+                            else:
+                                log.info(
+                                    f"Resolution AGREES window={window_start} duration={duration}: "
+                                    f"{outcome} == {official_outcome}"
+                                )
+            except Exception as e:
+                log.debug(f"Polymarket resolution check failed (non-fatal): {e}")
+
             # Write outcome to window_outcomes (single source of truth)
-            db.write_window_outcome(client, duration, window_start, outcome)
+            db.write_window_outcome(client, duration, window_start, outcome,
+                                    official_outcome=official_outcome)
 
             # If a paper trade exists for this window, resolve it with the same outcome
             trade = _get_paper_trade_for_window(client, duration, window_start)

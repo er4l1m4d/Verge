@@ -3523,6 +3523,24 @@ async function loadDiagnostics() {
     const diffClass = diffPct != null ? (diffPct < 0.1 ? 'ok' : 'warn') : '';
     const diffHTML = diffPct != null ? `<span class="diff ${diffClass}">${diffPct.toFixed(4)}%</span>` : '<span class="diff">—</span>';
 
+    // Resolution Agreement (Verge vs Polymarket)
+    const raData = d.resolution_agreement || [];
+    const raRows = raData.map(r =>
+      `<tr><td>${r.duration}</td><td>${r.total}</td><td>${r.agreements}</td><td>${r.disagreements}</td><td style="color:${r.agreement_pct >= 95 ? 'var(--signal-up)' : r.agreement_pct >= 80 ? 'var(--cost-amber)' : 'var(--signal-down)'}">${r.agreement_pct}%</td></tr>`
+    ).join('') || '<tr><td colspan="5" class="diag-empty">No validated resolutions yet — waiting for Polymarket to resolve</td></tr>';
+
+    // Polymarket Live Prices vs Verge
+    const pmLive = d.polymarket_live || {};
+    function pmRow(label, pmData, vergePrice) {
+      if (!pmData) return '';
+      const pmStrike = pmData.price_to_beat;
+      const pmUp = pmData.up_odds;
+      const strikeDiff = pmStrike && vergePrice ? Math.abs(pmStrike - vergePrice).toFixed(2) : '—';
+      return `<tr><td>${label}</td><td>${fmtPrice(pmStrike)}</td><td>${fmtPrice(vergePrice)}</td><td>$${strikeDiff}</td></tr>`;
+    }
+    const pmRows = pmRow('15m', pmLive['15m'], null) + pmRow('1h', pmLive['1h'], null);
+    const pmHTML = pmRows || '<tr><td colspan="4" class="diag-empty">Could not fetch Polymarket market data</td></tr>';
+
     el.innerHTML = `
       <div class="diag-section">
         <div class="diag-section-title">Live Prices</div>
@@ -3543,6 +3561,14 @@ async function loadDiagnostics() {
       <div class="diag-section">
         <div class="diag-section-title">Resolution Accuracy</div>
         <table class="diag-table"><thead><tr><th>Source</th><th>Total</th><th>Agreements</th><th>Accuracy</th></tr></thead><tbody>${accRows}</tbody></table>
+      </div>
+      <div class="diag-section">
+        <div class="diag-section-title">Resolution Agreement (Verge vs Polymarket)</div>
+        <table class="diag-table"><thead><tr><th>Duration</th><th>Total</th><th>Agreed</th><th>Disagreed</th><th>Agreement</th></tr></thead><tbody>${raRows}</tbody></table>
+      </div>
+      <div class="diag-section">
+        <div class="diag-section-title">Polymarket Live Market Prices</div>
+        <table class="diag-table"><thead><tr><th>Duration</th><th>Polymarket Strike</th><th>Verge Price</th><th>Difference</th></tr></thead><tbody>${pmHTML}</tbody></table>
       </div>
       <div class="diag-section">
         <div class="diag-section-title" style="display:flex;align-items:center;gap:12px;">

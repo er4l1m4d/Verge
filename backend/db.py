@@ -87,7 +87,8 @@ CREATE TABLE IF NOT EXISTS signals (
     divergence_signal INTEGER DEFAULT 0,
     fear_greed_value NUMERIC,
     mode TEXT NOT NULL DEFAULT 'safe',
-    price_source TEXT
+    price_source TEXT,
+    condition_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS paper_trades (
@@ -175,6 +176,8 @@ CREATE TABLE IF NOT EXISTS window_outcomes (
     market_window_start BIGINT NOT NULL,
     actual_outcome TEXT NOT NULL,
     resolved_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    official_outcome TEXT,
+    resolution_agreement BOOLEAN,
     PRIMARY KEY (market_duration, market_window_start)
 );
 CREATE INDEX IF NOT EXISTS idx_window_outcomes_duration
@@ -210,6 +213,7 @@ class SignalRow:
     fear_greed_value: int | None = None
     mode: str = "safe"
     price_source: str | None = None
+    condition_id: str | None = None
 
 
 @dataclass
@@ -284,6 +288,7 @@ def write_signal(client: Client, row: SignalRow) -> int:
         "fear_greed_value": row.fear_greed_value,
         "mode": row.mode,
         "price_source": row.price_source,
+        "condition_id": row.condition_id,
     }
     result = client.table("signals").insert(data).execute()
     row_id = result.data[0]["id"]
@@ -438,13 +443,18 @@ def get_unresolved_window_outcomes(client: Client, duration: str) -> list[int]:
     return sorted(obs_set - outcome_set)
 
 
-def write_window_outcome(client: Client, duration: str, window_start: int, outcome: str) -> None:
+def write_window_outcome(client: Client, duration: str, window_start: int, outcome: str,
+                          official_outcome: str | None = None) -> None:
     """Write the true outcome for a window to window_outcomes."""
-    client.table("window_outcomes").upsert({
+    data = {
         "market_duration": duration,
         "market_window_start": window_start,
         "actual_outcome": outcome,
-    }).execute()
+    }
+    if official_outcome is not None:
+        data["official_outcome"] = official_outcome
+        data["resolution_agreement"] = (outcome == official_outcome)
+    client.table("window_outcomes").upsert(data).execute()
     log.info(f"Wrote window_outcome duration={duration} window={window_start} outcome={outcome}")
 
 
@@ -1091,4 +1101,35 @@ def get_resolution_accuracy_by_source(client: Client) -> list[dict]:
             "accuracy_pct": round(stats["agreements"] / stats["total"] * 100, 1) if stats["total"] > 0 else 0,
         }
         for src, stats in sorted(by_source.items(), key=lambda x: -x[1]["total"])
+    ]
+
+
+def get_resolution_agreement(client: Client) -> list[dict]:
+    """Compare local outcomes vs official Polymarket outcomes per duration."""
+    resp = (
+        client.table("window_outcomes")
+        .select("market_duration,actual_outcome,official_outcome,resolution_agreement")
+        .not_.is_("official_outcome", "null")
+        .execute()
+    )
+    rows = resp.data or []
+    by_dur: dict[str, dict] = {}
+    for r in rows:
+        dur = r["market_duration"]
+        if dur not in by_dur:
+            by_dur[dur] = {"total": 0, "agreements": 0, "disagreements": 0}
+        by_dur[dur]["total"] += 1
+        if r.get("resolution_agreement"):
+            by_dur[dur]["agreements"] += 1
+        else:
+            by_dur[dur]["disagreements"] += 1
+    return [
+        {
+            "duration": dur,
+            "total": s["total"],
+            "agreements": s["agreements"],
+            "disagreements": s["disagreements"],
+            "agreement_pct": round(s["agreements"] / s["total"] * 100, 1) if s["total"] > 0 else 0,
+        }
+        for dur, s in sorted(by_dur.items())
     ]

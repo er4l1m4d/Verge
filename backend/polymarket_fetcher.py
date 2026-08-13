@@ -136,3 +136,83 @@ if __name__ == "__main__":
         if odds:
             print(f"  First: {odds[0]}")
             print(f"  Last:  {odds[-1]}")
+
+
+def get_polymarket_resolution(condition_id: str) -> dict | None:
+    """Query Gamma API for a closed market's official resolution.
+
+    Args:
+        condition_id: The on-chain CTF condition ID from the market.
+
+    Returns:
+        {"outcome": "UP"|"DOWN", "closed_time": str, "outcome_prices": list} or None
+        if the market isn't resolved yet or the query fails.
+    """
+    try:
+        resp = requests.get(f"{GAMMA_BASE}/markets/{condition_id}", timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        if not data.get("closed"):
+            return None
+        prices_raw = data.get("outcomePrices")
+        outcomes_raw = data.get("outcomes")
+        if not prices_raw or not outcomes_raw:
+            return None
+        prices = json.loads(prices_raw) if isinstance(prices_raw, str) else prices_raw
+        outcomes = json.loads(outcomes_raw) if isinstance(outcomes_raw, str) else outcomes_raw
+        if not prices or not outcomes or len(prices) < 2 or len(outcomes) < 2:
+            return None
+        # Winner is the outcome whose price settled to ~1.0
+        winner_idx = 0 if float(prices[0]) > 0.9 else 1
+        outcome = outcomes[winner_idx].upper()
+        return {
+            "outcome": outcome,
+            "closed_time": data.get("closedTime"),
+            "outcome_prices": prices,
+        }
+    except Exception:
+        return None
+
+
+def get_polymarket_live_market(series_slug: str = "btc-up-or-down-15m") -> dict | None:
+    """Query Gamma API for the current active market's prices (for diagnostics comparison).
+
+    Returns:
+        {"price_to_beat": float, "up_odds": float, "down_odds": float,
+         "question": str, "slug": str, "condition_id": str} or None.
+    """
+    try:
+        resp = requests.get(f"{GAMMA_BASE}/events", params={
+            "limit": 5,
+            "series_slug": series_slug,
+            "closed": "false",
+        }, timeout=10)
+        resp.raise_for_status()
+        events = resp.json()
+        for event in (events if isinstance(events, list) else []):
+            for market in event.get("markets", []):
+                if market.get("closed"):
+                    continue
+                # Parse outcomePrices
+                prices_raw = market.get("outcomePrices")
+                up_odds = down_odds = None
+                if prices_raw:
+                    prices = json.loads(prices_raw) if isinstance(prices_raw, str) else prices_raw
+                    if prices and len(prices) >= 2:
+                        up_odds = float(prices[0])
+                        down_odds = float(prices[1])
+                # Parse priceToBeat
+                metadata = event.get("eventMetadata") or {}
+                ptb = metadata.get("priceToBeat")
+                price_to_beat = float(ptb) if ptb else None
+                return {
+                    "price_to_beat": price_to_beat,
+                    "up_odds": up_odds,
+                    "down_odds": down_odds,
+                    "question": market.get("question", ""),
+                    "slug": event.get("slug", ""),
+                    "condition_id": market.get("conditionId"),
+                }
+    except Exception:
+        pass
+    return None

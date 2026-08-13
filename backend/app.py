@@ -710,6 +710,7 @@ def api_diagnostics():
     from chainlink_fetcher import get_chainlink_price
     from pyth_fetcher import get_pyth_btc_price_value
     from data_fetcher import get_spot_price
+    from polymarket_fetcher import get_polymarket_live_market
 
     now_ms = int(_time.time() * 1000)
     client = db.get_client()
@@ -733,7 +734,10 @@ def api_diagnostics():
     # 4. Resolution accuracy by source
     accuracy = db.get_resolution_accuracy_by_source(client)
 
-    # 5. TWAP vs single-tick comparison
+    # 5. Resolution agreement (Verge vs Polymarket official)
+    resolution_agreement = db.get_resolution_agreement(client)
+
+    # 6. TWAP vs single-tick comparison
     last_tick = twap_ticks[-1].price if twap_ticks else None
     twap_val = live["polymarket_ws_twap_60s"]
     twap_vs_tick = {
@@ -743,12 +747,22 @@ def api_diagnostics():
             if twap_val and last_tick else None,
     }
 
+    # 7. Polymarket live market comparison (15m + 1h)
+    pm_15m = get_polymarket_live_market("btc-up-or-down-15m")
+    pm_1h = get_polymarket_live_market("btc-up-or-down-hourly")
+    polymarket_live = {
+        "15m": pm_15m,
+        "1h": pm_1h,
+    }
+
     return jsonify({
         "source_breakdown": source_stats,
         "live_prices": live,
         "recent_signals": recent_signals,
         "resolution_accuracy": accuracy,
+        "resolution_agreement": resolution_agreement,
         "twap_vs_tick": twap_vs_tick,
+        "polymarket_live": polymarket_live,
         "timestamp": now_ms,
     })
 
