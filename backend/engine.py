@@ -872,7 +872,7 @@ def resolve_previous_hour(duration: str = "1h") -> bool:
                                     f"{outcome} == {official_outcome}"
                                 )
             except Exception as e:
-                log.debug(f"Polymarket resolution check failed (non-fatal): {e}")
+                log.warning(f"Polymarket resolution check failed (non-fatal): {e}")
 
             # Write outcome to window_outcomes (single source of truth)
             db.write_window_outcome(client, duration, window_start, outcome,
