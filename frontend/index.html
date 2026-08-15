@@ -2159,8 +2159,9 @@ function submitSecret() {
   if (!val) return;
   sessionStorage.setItem('verge_secret', val);
   hideSecretModal();
-  // Reload all data with the new secret
+  // Reload all data with the new secret and start polling
   loadAll();
+  startPolling();
 }
 
 document.getElementById('secret-submit')?.addEventListener('click', submitSecret);
@@ -2911,10 +2912,21 @@ window.addEventListener('hashchange', () => {
   }
 });
 
-// Start polling intervals
-window._pollInterval = setInterval(poll, 30000);
-window._chartInterval = setInterval(refreshChart, 5000);
-window._spotInterval = setInterval(refreshSpot, 1500);
+// --- Polling intervals — only start after secret is entered ---
+function startPolling() {
+  if (window._pollInterval) return; // already running
+  window._pollInterval = setInterval(poll, 30000);
+  window._chartInterval = setInterval(refreshChart, 5000);
+  window._spotInterval = setInterval(refreshSpot, 1500);
+}
+
+// Only auto-load if secret is already in session; otherwise modal blocks until entered
+if (getSecret()) {
+  loadAll();
+  startPolling();
+} else {
+  showSecretModal();
+}
 
 // --- Loading helper ---
 function loadingHTML(msg) {
