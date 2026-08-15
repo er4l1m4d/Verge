@@ -1717,6 +1717,89 @@
   }
   .diag-kv-value.active { color: var(--signal-up); }
   .diag-kv-value.fallback { color: var(--static); }
+
+  /* Secret Modal */
+  .secret-overlay {
+    position: fixed;
+    inset: 0;
+    background: var(--void);
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+  }
+  .secret-overlay.hidden { display: none; }
+  .secret-modal {
+    background: var(--deck);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px;
+    padding: 32px;
+    width: 100%;
+    max-width: 340px;
+    text-align: center;
+  }
+  .secret-modal .wordmark {
+    font-family: var(--font-mono);
+    font-weight: 500;
+    font-size: 16px;
+    color: var(--chalk);
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    margin-bottom: 20px;
+  }
+  .secret-modal input {
+    width: 100%;
+    background: var(--void);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 6px;
+    padding: 10px 14px;
+    color: var(--chalk);
+    font-family: var(--font-mono);
+    font-size: 14px;
+    letter-spacing: 1px;
+    outline: none;
+    text-align: center;
+    margin-bottom: 12px;
+    transition: border-color 0.2s;
+  }
+  .secret-modal input:focus {
+    border-color: var(--cost-amber);
+  }
+  .secret-modal input.error {
+    border-color: var(--signal-down);
+  }
+  .secret-modal .error-text {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--signal-down);
+    margin-bottom: 12px;
+    min-height: 16px;
+    transition: opacity 0.2s;
+  }
+  .secret-modal button {
+    width: 100%;
+    background: var(--cost-amber);
+    border: none;
+    border-radius: 6px;
+    padding: 10px;
+    color: var(--void);
+    font-family: var(--font-mono);
+    font-weight: 500;
+    font-size: 13px;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+  .secret-modal button:hover { opacity: 0.85; }
+  @keyframes secretShake {
+    0%, 100% { transform: translateX(0); }
+    15%, 45%, 75% { transform: translateX(-6px); }
+    30%, 60%, 90% { transform: translateX(6px); }
+  }
+  .secret-modal.shake {
+    animation: secretShake 0.4s ease;
+  }
   .diag-twap-compare {
     display: flex;
     gap: 16px;
@@ -1839,6 +1922,16 @@
         <button class="tutorial-btn primary" id="tutorial-next">Next</button>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- Secret Modal (shown on every session) -->
+<div class="secret-overlay hidden" id="secret-overlay">
+  <div class="secret-modal" id="secret-modal">
+    <div class="wordmark">VERGE</div>
+    <input type="password" id="secret-input" placeholder="Access secret" autocomplete="off" />
+    <div class="error-text" id="secret-error"></div>
+    <button id="secret-submit">Enter</button>
   </div>
 </div>
 
@@ -2035,13 +2128,45 @@ let secondsRemaining = 0;
 let lastHeartbeat = 0;
 
 function getSecret() {
-  let s = localStorage.getItem('verge_secret');
-  if (!s) {
-    s = prompt('Enter Verge access secret:');
-    if (s) localStorage.setItem('verge_secret', s);
-  }
-  return s || '';
+  return sessionStorage.getItem('verge_secret') || '';
 }
+
+function showSecretModal(errorMsg) {
+  const overlay = document.getElementById('secret-overlay');
+  const input = document.getElementById('secret-input');
+  const error = document.getElementById('secret-error');
+  const modal = document.getElementById('secret-modal');
+  overlay.classList.remove('hidden');
+  input.value = '';
+  input.classList.remove('error');
+  error.textContent = errorMsg || '';
+  if (errorMsg) {
+    input.classList.add('error');
+    modal.classList.remove('shake');
+    void modal.offsetWidth; // reflow to restart animation
+    modal.classList.add('shake');
+  }
+  input.focus();
+}
+
+function hideSecretModal() {
+  document.getElementById('secret-overlay').classList.add('hidden');
+}
+
+function submitSecret() {
+  const input = document.getElementById('secret-input');
+  const val = input.value.trim();
+  if (!val) return;
+  sessionStorage.setItem('verge_secret', val);
+  hideSecretModal();
+  // Reload all data with the new secret
+  loadAll();
+}
+
+document.getElementById('secret-submit')?.addEventListener('click', submitSecret);
+document.getElementById('secret-input')?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') submitSecret();
+});
 
 function authHeaders() {
   return { 'X-Secret': getSecret() };
@@ -2050,7 +2175,7 @@ function authHeaders() {
 async function fetchSignal() {
   try {
     const resp = await fetch(`${API_BASE}/api/signal?duration=${currentDuration}&duration=${currentDuration}`, { headers: authHeaders() });
-    if (resp.status === 401) { localStorage.removeItem('verge_secret'); return null; }
+    if (resp.status === 401) { sessionStorage.removeItem('verge_secret'); showSecretModal('Invalid secret'); return null; }
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     return await resp.json();
   } catch (e) {
@@ -2062,7 +2187,7 @@ async function fetchSignal() {
 async function fetchStats() {
   try {
     const resp = await fetch(`${API_BASE}/api/stats?duration=${currentDuration}&duration=${currentDuration}`, { headers: authHeaders() });
-    if (resp.status === 401) { localStorage.removeItem('verge_secret'); return null; }
+    if (resp.status === 401) { sessionStorage.removeItem('verge_secret'); showSecretModal('Invalid secret'); return null; }
     if (!resp.ok) return null;
     return await resp.json();
   } catch (e) {
@@ -2073,7 +2198,7 @@ async function fetchStats() {
 async function fetchPerformance() {
   try {
     const resp = await fetch(`${API_BASE}/api/performance?duration=${currentDuration}&duration=${currentDuration}`, { headers: authHeaders() });
-    if (resp.status === 401) { localStorage.removeItem('verge_secret'); return null; }
+    if (resp.status === 401) { sessionStorage.removeItem('verge_secret'); showSecretModal('Invalid secret'); return null; }
     if (!resp.ok) return null;
     return await resp.json();
   } catch (e) {
@@ -2084,7 +2209,7 @@ async function fetchPerformance() {
 async function fetchCandles() {
   try {
     const resp = await fetch(`${API_BASE}/api/candles?duration=${currentDuration}`, { headers: authHeaders() });
-    if (resp.status === 401) { localStorage.removeItem('verge_secret'); return null; }
+    if (resp.status === 401) { sessionStorage.removeItem('verge_secret'); showSecretModal('Invalid secret'); return null; }
     if (!resp.ok) return null;
     return await resp.json();
   } catch (e) {
@@ -2143,7 +2268,7 @@ function updateFreezeUI() {
 async function fetchSpot() {
   try {
     const resp = await fetch(`${API_BASE}/api/spot`, { headers: authHeaders() });
-    if (resp.status === 401) { localStorage.removeItem('verge_secret'); return null; }
+    if (resp.status === 401) { sessionStorage.removeItem('verge_secret'); showSecretModal('Invalid secret'); return null; }
     if (!resp.ok) return null;
     return await resp.json();
   } catch (e) {
@@ -2753,18 +2878,26 @@ async function poll() {
 }
 
 // Initial load
-fetchFrozenDurations().then(() => {
-  poll();
-  // Deep-link: open signal modal from URL hash
-  const hash = window.location.hash;
-  if (hash.startsWith('#signal/')) {
-    const signalId = parseInt(hash.replace('#signal/', ''), 10);
-    if (signalId) {
-      showSignalLogPage();
-      setTimeout(() => openSignalModal(signalId), 500);
+function loadAll() {
+  fetchFrozenDurations().then(() => {
+    poll();
+    // Deep-link: open signal modal from URL hash
+    const hash = window.location.hash;
+    if (hash.startsWith('#signal/')) {
+      const signalId = parseInt(hash.replace('#signal/', ''), 10);
+      if (signalId) {
+        showSignalLogPage();
+        setTimeout(() => openSignalModal(signalId), 500);
+      }
     }
-  }
-});
+  });
+}
+// Only auto-load if secret is already in session; otherwise modal blocks until entered
+if (getSecret()) {
+  loadAll();
+} else {
+  showSecretModal();
+}
 
 // Handle hash changes for in-page navigation
 window.addEventListener('hashchange', () => {
