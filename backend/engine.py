@@ -201,6 +201,9 @@ def get_current_market(duration: str = "1h") -> dict | None:
                     except (json.JSONDecodeError, IndexError, TypeError):
                         pass
 
+                cid = market.get("conditionId")
+                if not cid:
+                    log.warning(f"Market missing conditionId: question={market.get('question','')[:60]}")
                 best = {
                     "token_id": tokens[0],
                     "slug": event.get("slug", ""),
@@ -210,7 +213,7 @@ def get_current_market(duration: str = "1h") -> dict | None:
                     "duration": duration,
                     "price_to_beat": price_to_beat,
                     "up_odds": up_odds,
-                    "condition_id": market.get("conditionId"),
+                    "condition_id": cid,
                     # Backward compat — engine.py still uses these names
                     "hour_open_time": start_ms,
                     "hour_end_time": end_ms,
@@ -783,7 +786,7 @@ def record_polymarket_ws_tick() -> bool:
             log.info(f"Recorded Polymarket WS tick: ${price:,.2f}")
             return True
     except Exception as e:
-        log.debug(f"Polymarket WS tick record failed (non-fatal): {e}")
+        log.warning(f"Polymarket WS tick record failed (non-fatal): {e}")
     return False
 
 
@@ -854,23 +857,31 @@ def resolve_previous_hour(duration: str = "1h") -> bool:
                     .execute()
                 )
                 sig_rows = sig_resp.data or []
-                if sig_rows:
-                    cid = sig_rows[0].get("condition_id")
-                    if cid:
-                        from polymarket_fetcher import get_polymarket_resolution
-                        pm = get_polymarket_resolution(cid)
-                        if pm:
-                            official_outcome = pm["outcome"]
-                            if official_outcome != outcome:
-                                log.warning(
-                                    f"Resolution MISMATCH window={window_start} duration={duration}: "
-                                    f"Verge={outcome} Polymarket={official_outcome}"
-                                )
-                            else:
-                                log.info(
-                                    f"Resolution AGREES window={window_start} duration={duration}: "
-                                    f"{outcome} == {official_outcome}"
-                                )
+                if not sig_rows:
+                    log.warning(
+                        f"PM resolution gate: no condition_id found for window={window_start} duration={duration}"
+                    )
+                cid = sig_rows[0].get("condition_id") if sig_rows else None
+                if cid:
+                    from polymarket_fetcher import get_polymarket_resolution
+                    log.info(f"PM resolution: querying for window={window_start} duration={duration} cid={cid[:16]}...")
+                    pm = get_polymarket_resolution(cid)
+                    if pm:
+                        official_outcome = pm["outcome"]
+                        if official_outcome != outcome:
+                            log.warning(
+                                f"Resolution MISMATCH window={window_start} duration={duration}: "
+                                f"Verge={outcome} Polymarket={official_outcome}"
+                            )
+                        else:
+                            log.info(
+                                f"Resolution AGREES window={window_start} duration={duration}: "
+                                f"{outcome} == {official_outcome}"
+                            )
+                    else:
+                        log.warning(
+                            f"PM resolution: get_polymarket_resolution returned None for cid={cid[:16]}..."
+                        )
             except Exception as e:
                 log.warning(f"Polymarket resolution check failed (non-fatal): {e}")
 

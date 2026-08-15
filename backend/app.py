@@ -361,7 +361,7 @@ def heartbeat():
                 try:
                     record_polymarket_ws_tick()
                 except Exception as e:
-                    log.debug(f"Polymarket WS tick failed for {dur} (non-fatal): {e}")
+                    log.warning(f"Polymarket WS tick failed for {dur} (non-fatal): {e}")
 
                 # Telegram alert (only on new signal or persist failure)
                 if persist_status == "duplicate":
@@ -608,7 +608,7 @@ def get_frozen():
 @app.route("/api/phase2-progress")
 @require_secret
 def phase2_progress():
-    """Phase 2 readiness: count resolved 15m windows + notify when target hit."""
+    """Phase 2 readiness: count resolved 15m windows with official_outcome + notify when target hit."""
     try:
         import db
         client = db.get_client()
@@ -618,6 +618,7 @@ def phase2_progress():
             client.table("window_outcomes")
             .select("market_window_start", count="exact")
             .eq("market_duration", "15m")
+            .not_.is_("official_outcome", "null")
             .limit(5000)
             .execute()
         )
@@ -631,7 +632,7 @@ def phase2_progress():
                     from telegram import send_telegram_alert
                     send_telegram_alert(
                         f"Phase 2 data target reached!\n"
-                        f"{count}/300 resolved 15m windows.\n"
+                        f"{count}/300 resolved 15m windows with Polymarket official outcome.\n"
                         f"Ready to run capture-point comparison."
                     )
                     db.set_setting(client, "phase2_target_reached", str(int(time.time())))

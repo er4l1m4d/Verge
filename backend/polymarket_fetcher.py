@@ -1,8 +1,11 @@
 """Polymarket historical odds fetcher — Phase 1.3."""
 import json
 import time
+import logging
 
 import requests
+
+log = logging.getLogger("verge.polymarket")
 
 GAMMA_BASE = "https://gamma-api.polymarket.com"
 CLOB_BASE = "https://clob.polymarket.com"
@@ -153,24 +156,29 @@ def get_polymarket_resolution(condition_id: str) -> dict | None:
         resp.raise_for_status()
         data = resp.json()
         if not data.get("closed"):
+            log.warning(f"PM resolution: market {condition_id[:16]}... not closed yet")
             return None
         prices_raw = data.get("outcomePrices")
         outcomes_raw = data.get("outcomes")
         if not prices_raw or not outcomes_raw:
+            log.warning(f"PM resolution: missing prices/outcomes for {condition_id[:16]}... — keys: {list(data.keys())[:10]}")
             return None
         prices = json.loads(prices_raw) if isinstance(prices_raw, str) else prices_raw
         outcomes = json.loads(outcomes_raw) if isinstance(outcomes_raw, str) else outcomes_raw
         if not prices or not outcomes or len(prices) < 2 or len(outcomes) < 2:
+            log.warning(f"PM resolution: short arrays for {condition_id[:16]}... — prices={prices} outcomes={outcomes}")
             return None
         # Winner is the outcome whose price settled to ~1.0
         winner_idx = 0 if float(prices[0]) > 0.9 else 1
         outcome = outcomes[winner_idx].upper()
+        log.info(f"PM resolution: {condition_id[:16]}... -> {outcome}")
         return {
             "outcome": outcome,
             "closed_time": data.get("closedTime"),
             "outcome_prices": prices,
         }
-    except Exception:
+    except Exception as e:
+        log.warning(f"PM resolution: request failed for {condition_id[:16]}...: {e}")
         return None
 
 
