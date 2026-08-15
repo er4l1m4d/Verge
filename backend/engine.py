@@ -1056,15 +1056,15 @@ def start_ws_tick_accumulator() -> None:
     import threading
 
     def _run():
-        delay = 5
+        delay = 2
         while True:
             try:
                 asyncio.run(_accumulate_ticks())
-                delay = 5  # reset on successful run (connection closed normally)
+                delay = 2  # reset on successful run (connection closed normally)
             except Exception as e:
                 log.warning(f"WS tick accumulator dropped, reconnecting in {delay}s: {e}")
                 time.sleep(delay)
-                delay = min(delay * 2, 60)
+                delay = min(delay * 2, 15)
 
     thread = threading.Thread(target=_run, daemon=True, name="ws-tick-accumulator")
     thread.start()
