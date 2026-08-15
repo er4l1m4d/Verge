@@ -95,6 +95,7 @@ def _get_contract():
     """Return a cached contract instance, creating it only on first call."""
     global _contract
     if _contract is None:
+        from web3 import Web3
         w3 = _get_web3()
         _contract = w3.eth.contract(
             address=Web3.to_checksum_address(FEED_ADDRESS),

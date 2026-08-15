@@ -398,9 +398,12 @@ def get_unresolved_window_outcomes(client: Client, duration: str) -> list[int]:
     Returns sorted list of market_window_start values that need resolution.
     Filters out phantom windows (window_start=0).
 
+    Only looks at the last 48 hours to avoid full table scans.
     Uses pagination to bypass Supabase's default 1000-row limit.
     """
-    # Paginate through all observations to get distinct window_starts
+    since_ms = int(time.time() * 1000) - (48 * 3600 * 1000)
+
+    # Paginate through recent observations to get distinct window_starts
     obs_set: set[int] = set()
     offset = 0
     page_size = 1000
@@ -410,6 +413,7 @@ def get_unresolved_window_outcomes(client: Client, duration: str) -> list[int]:
             .select("market_window_start")
             .eq("market_duration", duration)
             .neq("market_window_start", 0)
+            .gte("market_window_start", since_ms)
             .range(offset, offset + page_size - 1)
             .execute()
         )
@@ -421,7 +425,7 @@ def get_unresolved_window_outcomes(client: Client, duration: str) -> list[int]:
             break
         offset += page_size
 
-    # Paginate through all outcomes
+    # Paginate through recent outcomes
     outcome_set: set[int] = set()
     offset = 0
     while True:
@@ -429,6 +433,7 @@ def get_unresolved_window_outcomes(client: Client, duration: str) -> list[int]:
             client.table("window_outcomes")
             .select("market_window_start")
             .eq("market_duration", duration)
+            .gte("market_window_start", since_ms)
             .range(offset, offset + page_size - 1)
             .execute()
         )
