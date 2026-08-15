@@ -939,6 +939,7 @@ def _resolve_via_chainlink_ticks(client, window_start: int, window_close: int) -
     Returns 'UP' or 'DOWN', or None if data unavailable.
     Resolution order: Chainlink ticks → Coinbase spot → Binance 5m candles.
     """
+    import db
     # 1. Try Chainlink ticks
     try:
         ticks = db.get_price_snapshots(

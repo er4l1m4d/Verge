@@ -152,7 +152,7 @@ def get_polymarket_resolution(condition_id: str) -> dict | None:
         if the market isn't resolved yet or the query fails.
     """
     try:
-        resp = requests.get(f"{GAMMA_BASE}/markets", params={"condition_id": condition_id}, timeout=10)
+        resp = requests.get(f"{GAMMA_BASE}/markets", params={"condition_ids": condition_id}, timeout=10)
         resp.raise_for_status()
         data = resp.json()
         # Gamma returns a list; find the matching market
