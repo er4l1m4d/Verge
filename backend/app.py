@@ -409,6 +409,93 @@ def heartbeat():
         return jsonify({"status": "error", "error": str(e)}), 500
 
 
+@app.route("/api/cron")
+@require_secret
+def cron_tick():
+    """Lightweight cron endpoint — same work as heartbeat, minimal response.
+
+    Use this for cron-job.org instead of /api/heartbeat to avoid
+    response size limits. Returns only status + timestamp.
+    """
+    try:
+        from market_config import supported_durations
+
+        client = db.get_client()
+        frozen = db.get_frozen_durations(client)
+
+        try:
+            db.cleanup_old_observations(client, max_age_days=30)
+        except Exception:
+            pass
+
+        for dur in supported_durations():
+            try:
+                if dur in frozen:
+                    resolve_previous_hour(duration=dur)
+                    continue
+
+                sig = generate_signal(duration=dur)
+
+                try:
+                    obs = db.WindowObservationRow(
+                        market_duration=sig.duration,
+                        market_window_start=sig.hour_open_time or 0,
+                        seconds_into_window=max(0, int(time.time() * 1000 - (sig.hour_open_time or 0)) // 1000),
+                        odds=sig.odds,
+                        current_price=sig.current_price,
+                        strike_price=sig.strike_price,
+                        rsi=sig.rsi,
+                        ma_signal=sig.ma_signal,
+                        volume_signal=sig.volume_signal,
+                        divergence_signal=sig.divergence_signal,
+                        fear_greed_value=sig.fear_greed_value,
+                        score=sig.score,
+                        hypothetical_decision=sig.final_decision,
+                    )
+                    db.log_window_observation(client, obs)
+                except Exception:
+                    pass
+
+                try:
+                    sig_id, persist_status = persist_signal(sig)
+                except Exception:
+                    persist_status = "error"
+
+                if dur == "15m":
+                    try:
+                        record_price_tick(duration=dur)
+                    except Exception:
+                        pass
+
+                try:
+                    record_polymarket_ws_tick()
+                except Exception:
+                    pass
+
+                if persist_status != "duplicate":
+                    try:
+                        alert_on_signal(sig, signal_id=sig_id, unlogged=(persist_status == "error"))
+                    except Exception:
+                        pass
+
+                try:
+                    resolve_previous_hour(duration=dur)
+                except Exception:
+                    pass
+
+            except Exception:
+                pass
+
+        try:
+            send_hourly_summary(client)
+        except Exception:
+            pass
+
+        return jsonify({"ok": 1})
+    except Exception:
+        return jsonify({"ok": 0})
+
+
 @app.route("/api/stats")
 @require_secret
 def stats():
