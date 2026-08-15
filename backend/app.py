@@ -17,6 +17,8 @@ from functools import wraps
 
 sys.path.insert(0, os.path.dirname(__file__))
 
+import db  # Force full import (supabase → realtime → websockets) before any threads start
+
 from engine import generate_signal, persist_signal, resolve_previous_hour, record_price_tick, record_polymarket_ws_tick, start_ws_tick_accumulator
 from telegram import alert_on_signal, send_hourly_summary, start_bot_listener
 
@@ -293,7 +295,6 @@ def heartbeat():
     Frozen durations skip signal generation but still resolve open trades.
     """
     try:
-        import db
         from market_config import supported_durations
 
         client = db.get_client()
