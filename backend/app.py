@@ -846,9 +846,28 @@ def api_diagnostics():
     # 7. Polymarket live market comparison (15m + 1h)
     pm_15m = get_polymarket_live_market("btc-up-or-down-15m")
     pm_1h = get_polymarket_live_market("btc-up-or-down-hourly")
+
+    # Compute Verge's best available price for comparison
+    verge_price = (
+        live.get("polymarket_ws_twap_60s")
+        or live.get("chainlink_onchain")
+        or live.get("pyth")
+        or live.get("coinbase_spot")
+    )
+
+    def _enrich_pm(pm_data):
+        if not pm_data or not verge_price:
+            return pm_data
+        strike = pm_data.get("price_to_beat")
+        return {
+            **pm_data,
+            "verge_price": verge_price,
+            "difference": round(abs(strike - verge_price), 2) if strike else None,
+        }
+
     polymarket_live = {
-        "15m": pm_15m,
-        "1h": pm_1h,
+        "15m": _enrich_pm(pm_15m),
+        "1h": _enrich_pm(pm_1h),
     }
 
     return jsonify({
