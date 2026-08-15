@@ -18,11 +18,16 @@ log = logging.getLogger("verge.db")
 
 _supabase_url = os.environ.get("SUPABASE_URL", "")
 _supabase_key = os.environ.get("SUPABASE_KEY", "")
+_client_singleton = None
 
 
 def get_client() -> Client:
-    """Get Supabase client."""
-    return create_client(_supabase_url, _supabase_key)
+    """Get Supabase client (cached singleton — avoids recreating a new
+    client and its connection pool on every call)."""
+    global _client_singleton
+    if _client_singleton is None:
+        _client_singleton = create_client(_supabase_url, _supabase_key)
+    return _client_singleton
 
 
 def get_setting(client: Client, key: str) -> str | None:
