@@ -1019,30 +1019,30 @@ def _get_paper_trade_for_window(client, duration: str, window_start: int) -> dic
 
 # ── TWAP: Time-Weighted Average Price (Phase 3) ──────────────────────
 
-def compute_twap(ticks: list[dict], window_end_ms: int, window_seconds: int = 60) -> float | None:
+def compute_twap(ticks: list["PriceSnapshotRow"], window_end_ms: int, window_seconds: int = 60) -> float | None:
     """Compute a time-weighted average price over a sliding window.
 
-    ticks: [{'timestamp_ms': int, 'price': float}, ...], any order.
+    ticks: [PriceSnapshotRow, ...], any order.
     Time-weights each price by how long it was the 'current' price within
     the window, correctly clipping the first tick's contribution if it
     started before the window began.
     """
     window_start_ms = window_end_ms - (window_seconds * 1000)
-    ticks = sorted([t for t in ticks if t["timestamp_ms"] <= window_end_ms],
-                    key=lambda t: t["timestamp_ms"])
-    ticks = [t for t in ticks if t["timestamp_ms"] >= window_start_ms] or ticks[-1:]
+    ticks = sorted([t for t in ticks if t.timestamp_ms <= window_end_ms],
+                    key=lambda t: t.timestamp_ms)
+    ticks = [t for t in ticks if t.timestamp_ms >= window_start_ms] or ticks[-1:]
     if not ticks:
         return None
 
     weighted_sum, total_weight = 0.0, 0.0
     for i, tick in enumerate(ticks):
-        seg_start = max(tick["timestamp_ms"], window_start_ms)
-        seg_end = ticks[i + 1]["timestamp_ms"] if i + 1 < len(ticks) else window_end_ms
+        seg_start = max(tick.timestamp_ms, window_start_ms)
+        seg_end = ticks[i + 1].timestamp_ms if i + 1 < len(ticks) else window_end_ms
         duration = max(0, seg_end - seg_start)
-        weighted_sum += tick["price"] * duration
+        weighted_sum += tick.price * duration
         total_weight += duration
 
-    return weighted_sum / total_weight if total_weight > 0 else ticks[-1]["price"]
+    return weighted_sum / total_weight if total_weight > 0 else ticks[-1].price
 
 
 def start_ws_tick_accumulator() -> None:
