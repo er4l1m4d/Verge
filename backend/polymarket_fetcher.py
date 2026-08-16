@@ -188,13 +188,19 @@ def get_polymarket_resolution(condition_id: str) -> dict | None:
 def get_polymarket_live_market(series_slug: str = "btc-up-or-down-15m") -> dict | None:
     """Query Gamma API for the current active market's prices (for diagnostics comparison).
 
+    Filters to only markets that are currently active (start <= now < end)
+    to avoid returning stale/closed markets that Gamma still lists as open.
+
     Returns:
         {"price_to_beat": float, "up_odds": float, "down_odds": float,
          "question": str, "slug": str, "condition_id": str} or None.
     """
+    from datetime import datetime, timezone
+    now_ms = int(time.time() * 1000)
+
     try:
         resp = requests.get(f"{GAMMA_BASE}/events", params={
-            "limit": 5,
+            "limit": 10,
             "series_slug": series_slug,
             "closed": "false",
         }, timeout=10)
@@ -204,6 +210,22 @@ def get_polymarket_live_market(series_slug: str = "btc-up-or-down-15m") -> dict 
             for market in event.get("markets", []):
                 if market.get("closed"):
                     continue
+
+                # Time-based filter: must be currently active
+                event_start = market.get("eventStartTime") or market.get("startDate")
+                end_date = market.get("endDate")
+                if not event_start or not end_date:
+                    continue
+                try:
+                    start_dt = datetime.fromisoformat(event_start.replace("Z", "+00:00"))
+                    end_dt = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
+                    start_ms = int(start_dt.timestamp() * 1000)
+                    end_ms = int(end_dt.timestamp() * 1000)
+                except (ValueError, TypeError):
+                    continue
+                if now_ms < start_ms or now_ms >= end_ms:
+                    continue
+
                 # Parse outcomePrices
                 prices_raw = market.get("outcomePrices")
                 up_odds = down_odds = None
