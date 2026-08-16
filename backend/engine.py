@@ -581,8 +581,11 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
     strike_price = market.get("price_to_beat")
     if strike_price is not None:
         log.info(f"[{duration}] Using official Polymarket strike: ${strike_price:,.2f}")
+    elif duration == "15m":
+        # 15m markets never have eventMetadata.priceToBeat — skip extraction chain
+        log.debug(f"[15m] No official Polymarket strike (expected), computing from Chainlink bars")
     else:
-        # Phase 1: Recursive key search + text parsing fallback
+        # 1h: Recursive key search + text parsing fallback
         strike_price = extract_strike_from_market(market)
         if strike_price is not None:
             log.info(f"[{duration}] Strike from recursive key search: ${strike_price:,.2f}")
@@ -592,20 +595,31 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
                 log.info(f"[{duration}] Strike from text parsing: ${strike_price:,.2f}")
 
     if strike_price is None:
-        log.info(f"[{duration}] All extraction methods failed, using candle/Chainlink fallback")
         if duration == "15m" and hour_open_time is not None:
             # 15m: Prefer Chainlink bars' open (matches Polymarket's resolution source)
             if len(df_price) > 0:
+                log.info(
+                    f"[15m] df_price: {len(df_price)} bars, "
+                    f"open_time range: {df_price['open_time'].min()}-{df_price['open_time'].max()}, "
+                    f"target: {hour_open_time}"
+                )
                 matching = df_price[df_price["open_time"] >= hour_open_time]
                 if len(matching) > 0:
                     strike_price = float(matching.iloc[0]["open"])
                     log.info(f"[15m] Strike from Chainlink bars: ${strike_price:,.2f}")
+                else:
+                    log.warning(
+                        f"[15m] No Chainlink bar with open_time >= {hour_open_time} "
+                        f"(bars end at {df_price['open_time'].max()})"
+                    )
             # Fallback: Coinbase if Chainlink bars unavailable
             if strike_price is None:
                 from data_fetcher import get_price_at_time
                 strike_price = get_price_at_time(hour_open_time)
                 if strike_price:
                     log.info(f"[15m] Strike from Coinbase fallback: ${strike_price:,.2f}")
+                else:
+                    log.warning(f"[15m] Coinbase fallback also failed for hour_open_time={hour_open_time}")
         elif hour_open_time is not None and len(df_price) > 0:
             # 1h fallback: compute from first candle in window
             matching = df_price[df_price["open_time"] >= hour_open_time]
@@ -615,6 +629,9 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
                 strike_price = float(df_price.iloc[0]["open"])
             if strike_price:
                 log.info(f"[{duration}] Strike from Binance candles: ${strike_price:,.2f}")
+
+    if strike_price is None:
+        log.warning(f"[{duration}] No strike price available from any source")
 
     return LiveSignal(
         decision=sig.decision,
