@@ -818,7 +818,7 @@ def api_diagnostics():
     twap_ticks = db.get_recent_price_snapshots(client, "polymarket_ws_tick", "BTCUSD",
                                                 since_ms=now_ms - 90_000)
     live = {
-        "polymarket_ws_twap_60s": compute_twap(twap_ticks, now_ms) if len(twap_ticks) >= 3 else None,
+        "polymarket_ws_twap_60s": compute_twap(twap_ticks, now_ms) if len(twap_ticks) >= 2 else None,
         "chainlink_onchain": get_chainlink_price(),
         "pyth": get_pyth_btc_price_value(),
         "coinbase_spot": get_spot_price(),

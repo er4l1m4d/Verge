@@ -545,7 +545,7 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
         _db.get_client(), source="polymarket_ws_tick", symbol="BTCUSD",
         since_ms=now_ms_val - 90_000,
     )
-    twap_price = compute_twap(recent_ticks, window_end_ms=now_ms_val) if len(recent_ticks) >= 3 else None
+    twap_price = compute_twap(recent_ticks, window_end_ms=now_ms_val) if len(recent_ticks) >= 2 else None
 
     # 1. TWAP from accumulated Polymarket WS ticks (best: same source Polymarket resolves with)
     if twap_price:

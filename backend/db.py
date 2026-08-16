@@ -1029,17 +1029,28 @@ def get_recent_price_snapshots(
 
 def get_source_breakdown(client: Client, since_ms: int) -> list[dict]:
     """Get average price and count per source for the last 24h."""
-    resp = (
-        client.table("price_snapshots")
-        .select("source,price")
-        .gte("timestamp_ms", since_ms)
-        .execute()
-    )
-    rows = resp.data or []
+    PAGE_SIZE = 1000
+    offset = 0
     by_source: dict[str, list[float]] = {}
-    for r in rows:
-        src = r["source"]
-        by_source.setdefault(src, []).append(float(r["price"]))
+
+    while True:
+        resp = (
+            client.table("price_snapshots")
+            .select("source,price")
+            .gte("timestamp_ms", since_ms)
+            .range(offset, offset + PAGE_SIZE - 1)
+            .execute()
+        )
+        rows = resp.data or []
+        if not rows:
+            break
+        for r in rows:
+            src = r["source"]
+            by_source.setdefault(src, []).append(float(r["price"]))
+        if len(rows) < PAGE_SIZE:
+            break
+        offset += PAGE_SIZE
+
     return [
         {"source": src, "avg_price": round(sum(prices) / len(prices), 2), "count": len(prices)}
         for src, prices in sorted(by_source.items(), key=lambda x: -len(x[1]))
