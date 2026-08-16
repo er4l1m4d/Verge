@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 import db  # Force full import (supabase → realtime → websockets) before any threads start
 import netrc  # requests lazily imports this; force load before threads start
 
-from engine import generate_signal, persist_signal, resolve_previous_hour, record_price_tick, record_polymarket_ws_tick, start_ws_tick_accumulator
+from engine import generate_signal, persist_signal, resolve_previous_hour, retroactive_regrade_trades, record_price_tick, record_polymarket_ws_tick, start_ws_tick_accumulator
 from telegram import alert_on_signal, send_hourly_summary, start_bot_listener
 
 app = Flask(__name__)
@@ -392,6 +392,13 @@ def heartbeat():
             except Exception as e:
                 log.warning(f"Heartbeat failed for {dur}: {e}")
                 results.append({"duration": dur, "error": str(e)})
+
+        # Retroactive regrade: fix any trades graded against Verge's outcome
+        # when Polymarket's official_outcome differs (idempotent, no-op after first run)
+        try:
+            retroactive_regrade_trades()
+        except Exception as e:
+            log.warning(f"Retroactive regrade failed (non-fatal): {e}")
 
         # Hourly 15m summary (sent at top of hour, non-fatal)
         try:

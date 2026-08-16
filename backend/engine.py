@@ -905,13 +905,21 @@ def resolve_previous_hour(duration: str = "1h") -> bool:
             db.write_window_outcome(client, duration, window_start, outcome,
                                     official_outcome=official_outcome)
 
-            # If a paper trade exists for this window, resolve it with the same outcome
+            # If a paper trade exists for this window, resolve it with the outcome
+            # Use official_outcome (Polymarket) when available — this is the ground truth.
+            # Fall back to Verge's outcome only when Polymarket hasn't resolved yet.
             trade = _get_paper_trade_for_window(client, duration, window_start)
             if trade and trade.get("resolved_outcome") is None:
+                grading_outcome = official_outcome if official_outcome else outcome
+                if official_outcome and official_outcome != outcome:
+                    log.warning(
+                        f"Grading trade with Polymarket outcome ({official_outcome}) "
+                        f"instead of Verge outcome ({outcome}) for window={window_start}"
+                    )
                 db.resolve_trade_with_outcome(
                     client,
                     signal_id=trade["signal_id"],
-                    outcome=outcome,
+                    outcome=grading_outcome,
                     odds=trade.get("odds", 0.50),
                     decision=trade.get("decision", ""),
                 )
@@ -923,6 +931,74 @@ def resolve_previous_hour(duration: str = "1h") -> bool:
 
     log.info(f"Resolved {resolved_count}/{len(unresolved_windows)} windows (duration={duration})")
     return resolved_count > 0
+
+
+def retroactive_regrade_trades() -> int:
+    """One-time fix: re-grade paper trades that were graded against Verge's outcome
+    when a Polymarket official_outcome exists that differs.
+
+    Returns the number of trades re-graded.
+    """
+    import db
+    client = db.get_client()
+
+    # Find window_outcomes where official_outcome differs from outcome
+    try:
+        resp = (
+            client.table("window_outcomes")
+            .select("market_duration, window_start, actual_outcome, official_outcome")
+            .not_.is_("official_outcome", "null")
+            .execute()
+        )
+        rows = resp.data or []
+    except Exception as e:
+        log.warning(f"Retroactive regrade: failed to fetch window_outcomes: {e}")
+        return 0
+
+    regraded = 0
+    for row in rows:
+        outcome = row["actual_outcome"]
+        official = row["official_outcome"]
+        if outcome == official:
+            continue  # already agrees, no regrade needed
+
+        duration = row["market_duration"]
+        window_start = row["window_start"]
+
+        # Find the trade for this window
+        trade = _get_paper_trade_for_window(client, duration, window_start)
+        if not trade or trade.get("resolved_outcome") is None:
+            continue
+
+        # Check if the trade was graded with the wrong outcome
+        current_outcome = trade["resolved_outcome"]
+        if current_outcome == official:
+            continue  # already correct
+
+        # Re-grade with official outcome
+        decision = trade.get("decision", "")
+        odds = trade.get("odds", 0.50)
+        won = (decision == "BET HIGHER" and official == "UP") or \
+              (decision == "BET LOWER" and official == "DOWN")
+        pnl_pct = (1 / odds - 1) * 1.0 if won else -1.0
+
+        log.warning(
+            f"Retroactive regrade: window={window_start} duration={duration} "
+            f"Verge={outcome} -> Polymarket={official} "
+            f"decision={decision} pnl={pnl_pct:+.2f}"
+        )
+
+        db.update_paper_trade_resolution(
+            client,
+            signal_id=trade["signal_id"],
+            resolved_outcome=official,
+            simulated_pnl=round(pnl_pct, 4),
+        )
+        regraded += 1
+
+    if regraded > 0:
+        log.info(f"Retroactive regrade: corrected {regraded} trades")
+    return regraded
 
 
 def _resolve_via_binance(window_start: int, window_close: int) -> str | None:
@@ -953,11 +1029,14 @@ def _resolve_via_binance(window_start: int, window_close: int) -> str | None:
 def _resolve_via_chainlink_ticks(client, window_start: int, window_close: int) -> str | None:
     """Resolve outcome via Chainlink ticks from price_snapshots, with Coinbase and Binance fallbacks.
 
+    Matches Polymarket's 15m resolution methodology:
+    "resolve to 'Up' if the TWAP >= price at the beginning of that range"
+
     Returns 'UP' or 'DOWN', or None if data unavailable.
-    Resolution order: Chainlink ticks → Coinbase spot → Binance 5m candles.
+    Resolution order: Chainlink ticks (TWAP) → Coinbase spot → Binance 5m candles.
     """
     import db
-    # 1. Try Chainlink ticks
+    # 1. Try Chainlink ticks (TWAP vs opening price — matches Polymarket)
     try:
         ticks = db.get_price_snapshots(
             client, source="chainlink", symbol="BTC",
@@ -967,11 +1046,23 @@ def _resolve_via_chainlink_ticks(client, window_start: int, window_close: int) -
 
         if len(window_ticks) >= 2:
             open_price = float(window_ticks[0]["price"])
-            close_price = float(window_ticks[-1]["price"])
-            outcome = "UP" if close_price > open_price else "DOWN"
+
+            # Compute TWAP (time-weighted average) — matches Polymarket's resolution
+            window_seconds = (window_close - window_start) / 1000
+            weighted_sum, total_weight = 0.0, 0.0
+            for i, tick in enumerate(window_ticks):
+                seg_start = max(tick["timestamp_ms"], window_start)
+                seg_end = window_ticks[i + 1]["timestamp_ms"] if i + 1 < len(window_ticks) else window_close
+                duration = max(0, seg_end - seg_start)
+                weighted_sum += float(tick["price"]) * duration
+                total_weight += duration
+            twap = weighted_sum / total_weight if total_weight > 0 else float(window_ticks[-1]["price"])
+
+            # Polymarket: UP if TWAP >= opening price
+            outcome = "UP" if twap >= open_price else "DOWN"
             log.info(
-                f"15m resolution via ticks: open=${open_price:,.2f} "
-                f"close=${close_price:,.2f} -> {outcome} "
+                f"15m resolution via TWAP: open=${open_price:,.2f} "
+                f"twap=${twap:,.2f} -> {outcome} "
                 f"({len(window_ticks)} ticks)"
             )
             return outcome
