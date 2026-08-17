@@ -21,3 +21,8 @@ CREATE INDEX IF NOT EXISTS idx_resolution_audit_duration
     ON resolution_audit(duration);
 CREATE INDEX IF NOT EXISTS idx_resolution_audit_window
     ON resolution_audit(window_start);
+
+-- RLS: allow anon key (backend service) full access (matches 002 pattern)
+ALTER TABLE resolution_audit ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "anon_full_access" ON resolution_audit
+    FOR ALL USING (auth.role() = 'anon');
