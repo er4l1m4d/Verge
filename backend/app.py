@@ -20,7 +20,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 import db  # Force full import (supabase → realtime → websockets) before any threads start
 import netrc  # requests lazily imports this; force load before threads start
 
-from engine import generate_signal, persist_signal, resolve_previous_hour, retroactive_regrade_trades, record_price_tick, record_polymarket_ws_tick, start_ws_tick_accumulator
+from engine import generate_signal, persist_signal, resolve_previous_hour, retroactive_regrade_trades, record_price_tick
+from polymarket_rtds import start_rtds_thread
 from telegram import alert_on_signal, send_hourly_summary, start_bot_listener
 
 app = Flask(__name__)
@@ -28,7 +29,7 @@ app = Flask(__name__)
 # Start Telegram bot listener for /start commands (once, primary worker only)
 if os.environ.get("WEB_CONCURRENCY", "1") == "1":
     start_bot_listener()
-    start_ws_tick_accumulator()
+    start_rtds_thread()
 
 # CORS: restrict to Vercel frontend in production, allow all in dev
 VERCEL_URL = os.environ.get("VERCEL_URL", "")
@@ -359,12 +360,6 @@ def heartbeat():
                     except Exception as e:
                         log.warning(f"Price tick recording failed for {dur} (non-fatal): {e}")
 
-                # Record Polymarket WS tick (fallback for accumulator thread)
-                try:
-                    record_polymarket_ws_tick()
-                except Exception as e:
-                    log.warning(f"Polymarket WS tick failed for {dur} (non-fatal): {e}")
-
                 # Telegram alert (only on new signal or persist failure)
                 if persist_status == "duplicate":
                     log.info(f"Skipping duplicate alert for {dur} window {sig.hour_open_time}")
@@ -473,11 +468,6 @@ def cron_tick():
                         record_price_tick(duration=dur)
                     except Exception:
                         pass
-
-                try:
-                    record_polymarket_ws_tick()
-                except Exception:
-                    pass
 
                 if persist_status != "duplicate":
                     try:
@@ -822,7 +812,7 @@ def api_diagnostics():
     source_stats = db.get_source_breakdown(client, since_ms=now_ms - 86_400_000)
 
     # 2. Live prices from each source
-    twap_ticks = db.get_recent_price_snapshots(client, "polymarket_ws_tick", "BTCUSD",
+    twap_ticks = db.get_recent_price_snapshots(client, "polymarket_rtds", "BTCUSD",
                                                 since_ms=now_ms - 90_000)
     live = {
         "polymarket_ws_twap_60s": compute_twap(twap_ticks, now_ms) if len(twap_ticks) >= 2 else None,
@@ -830,6 +820,14 @@ def api_diagnostics():
         "pyth": get_pyth_btc_price_value(),
         "coinbase_spot": get_spot_price(),
     }
+
+    # RTDS health info
+    from polymarket_rtds import get_rtds_health
+    rtds_health = get_rtds_health()
+    live["rtds_tick_count_5m"] = len(db.get_recent_price_snapshots(
+        client, "polymarket_rtds", "BTCUSD", since_ms=now_ms - 300_000
+    ))
+    live["rtds_last_tick_age_ms"] = rtds_health["last_tick_age_ms"]
 
     # 3. Recent signals with source
     recent_signals = db.get_recent_signals_with_source(client, limit=20)

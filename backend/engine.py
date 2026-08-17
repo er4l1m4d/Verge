@@ -349,7 +349,7 @@ def get_current_price_data_for_duration(config: dict):
         # 15m path: use Chainlink on-chain feed + Binance bootstrap
         from chainlink_fetcher import get_chainlink_bars
 
-        # Read cached ticks from price_snapshots table
+        # Read cached ticks from price_snapshots table (try RTDS first, then on-chain)
         cached_ticks = []
         fetch_failed = False
         try:
@@ -357,9 +357,14 @@ def get_current_price_data_for_duration(config: dict):
             client = db.get_client()
             since_ms = int(_time.time() * 1000) - (config["bar_lookback"] + 10) * 60_000
             raw_ticks = db.get_price_snapshots(
-                client, source="chainlink", symbol="BTC",
+                client, source="polymarket_rtds", symbol="BTCUSD",
                 since_ms=since_ms, limit=500,
             )
+            if len(raw_ticks) < 10:
+                raw_ticks = db.get_price_snapshots(
+                    client, source="chainlink", symbol="BTC",
+                    since_ms=since_ms, limit=500,
+                )
             cached_ticks = [{"timestamp_ms": t["timestamp_ms"], "price": t["price"]} for t in raw_ticks]
         except Exception as e:
             log.warning(f"Failed to read cached ticks (non-fatal): {e}")
@@ -542,7 +547,7 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
     import db as _db
     now_ms_val = int(time.time() * 1000)
     recent_ticks = _db.get_recent_price_snapshots(
-        _db.get_client(), source="polymarket_ws_tick", symbol="BTCUSD",
+        _db.get_client(), source="polymarket_rtds", symbol="BTCUSD",
         since_ms=now_ms_val - 90_000,
     )
     twap_price = compute_twap(recent_ticks, window_end_ms=now_ms_val) if len(recent_ticks) >= 2 else None
@@ -774,12 +779,11 @@ def record_price_tick(duration: str = "15m") -> bool:
 
 
 def record_polymarket_ws_tick() -> bool:
-    """Fetch Polymarket WS price and write as a tick (heartbeat fallback for accumulator).
+    """DEPRECATED: RTDS handles continuous tick collection.
 
-    Uses the short-lived WebSocket connection that already works for signal generation.
-    Writes to price_snapshots with source='polymarket_ws_tick' for TWAP calculation.
-    Called on every heartbeat as a reliable fallback when the persistent accumulator
-    thread fails (e.g. on free hosting tiers that kill long-lived connections).
+    Kept for reference. Do not call from heartbeat.
+    The polymarket_rtds module maintains a persistent connection that
+    continuously writes ticks, making this short-lived approach unnecessary.
 
     Returns True if a tick was written, False on failure.
     """
@@ -1033,41 +1037,42 @@ def _resolve_via_chainlink_ticks(client, window_start: int, window_close: int) -
     "resolve to 'Up' if the TWAP >= price at the beginning of that range"
 
     Returns 'UP' or 'DOWN', or None if data unavailable.
-    Resolution order: Chainlink ticks (TWAP) → Coinbase spot → Binance 5m candles.
+    Resolution order: RTDS Chainlink → on-chain Chainlink → Coinbase → Binance.
     """
     import db
-    # 1. Try Chainlink ticks (TWAP vs opening price — matches Polymarket)
-    try:
-        ticks = db.get_price_snapshots(
-            client, source="chainlink", symbol="BTC",
-            since_ms=window_start, limit=1000,
-        )
-        window_ticks = [t for t in ticks if t["timestamp_ms"] <= window_close]
 
-        if len(window_ticks) >= 2:
-            open_price = float(window_ticks[0]["price"])
-
-            # Compute TWAP (time-weighted average) — matches Polymarket's resolution
-            window_seconds = (window_close - window_start) / 1000
-            weighted_sum, total_weight = 0.0, 0.0
-            for i, tick in enumerate(window_ticks):
-                seg_start = max(tick["timestamp_ms"], window_start)
-                seg_end = window_ticks[i + 1]["timestamp_ms"] if i + 1 < len(window_ticks) else window_close
-                duration = max(0, seg_end - seg_start)
-                weighted_sum += float(tick["price"]) * duration
-                total_weight += duration
-            twap = weighted_sum / total_weight if total_weight > 0 else float(window_ticks[-1]["price"])
-
-            # Polymarket: UP if TWAP >= opening price
-            outcome = "UP" if twap >= open_price else "DOWN"
-            log.info(
-                f"15m resolution via TWAP: open=${open_price:,.2f} "
-                f"twap=${twap:,.2f} -> {outcome} "
-                f"({len(window_ticks)} ticks)"
+    # 1. Try RTDS Chainlink ticks first (highest density), then on-chain Chainlink
+    for source, symbol in [("polymarket_rtds", "BTCUSD"), ("chainlink", "BTC")]:
+        try:
+            ticks = db.get_price_snapshots(
+                client, source=source, symbol=symbol,
+                since_ms=window_start, limit=1000,
             )
-            return outcome
-    except Exception as e:
-        log.warning(f"Chainlink tick resolution failed: {e}")
+            window_ticks = [t for t in ticks if t["timestamp_ms"] <= window_close]
+
+            if len(window_ticks) >= 2:
+                open_price = float(window_ticks[0]["price"])
+
+                # Compute TWAP (time-weighted average) — matches Polymarket's resolution
+                weighted_sum, total_weight = 0.0, 0.0
+                for i, tick in enumerate(window_ticks):
+                    seg_start = max(tick["timestamp_ms"], window_start)
+                    seg_end = window_ticks[i + 1]["timestamp_ms"] if i + 1 < len(window_ticks) else window_close
+                    duration = max(0, seg_end - seg_start)
+                    weighted_sum += float(tick["price"]) * duration
+                    total_weight += duration
+                twap = weighted_sum / total_weight if total_weight > 0 else float(window_ticks[-1]["price"])
+
+                # Polymarket: UP if TWAP >= opening price
+                outcome = "UP" if twap >= open_price else "DOWN"
+                log.info(
+                    f"15m resolution via TWAP ({source}): open=${open_price:,.2f} "
+                    f"twap=${twap:,.2f} -> {outcome} "
+                    f"({len(window_ticks)} ticks)"
+                )
+                return outcome
+        except Exception as e:
+            log.warning(f"Tick resolution failed ({source}): {e}")
 
     # 2. Try Coinbase spot prices
     try:
@@ -1155,11 +1160,11 @@ def compute_twap(ticks: list["PriceSnapshotRow"], window_end_ms: int, window_sec
 
 
 def start_ws_tick_accumulator() -> None:
-    """Start a background thread that accumulates Polymarket WS ticks to price_snapshots.
+    """DEPRECATED: Use polymarket_rtds.start_rtds_thread() instead.
 
-    Follows the same pattern as telegram.start_bot_listener(): a daemon thread
-    with automatic reconnect on failure. Writes every BTC tick to the
-    price_snapshots table tagged source='polymarket_ws_tick'.
+    Kept for reference. Do not call from app.py.
+    The RTDS module provides a more robust, always-on connection with
+    proper PING keepalive and exponential-backoff reconnection.
     """
     import threading
 

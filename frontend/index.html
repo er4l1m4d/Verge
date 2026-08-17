@@ -3658,12 +3658,18 @@ async function loadDiagnostics() {
     // 2. Live Prices
     const live = d.live_prices || {};
     const liveKeys = ['polymarket_ws_twap_60s', 'chainlink_onchain', 'pyth', 'coinbase_spot'];
-    const liveLabels = {'polymarket_ws_twap_60s': 'TWAP 60s', 'chainlink_onchain': 'Chainlink', 'pyth': 'Pyth', 'coinbase_spot': 'Coinbase'};
+    const liveLabels = {'polymarket_ws_twap_60s': 'Chainlink RTDS', 'chainlink_onchain': 'Chainlink On-Chain', 'pyth': 'Pyth', 'coinbase_spot': 'Coinbase'};
     const liveHTML = liveKeys.map(k => {
       const v = live[k];
       const isActive = k === 'polymarket_ws_twap_60s' && v != null;
       return `<div class="diag-kv-item"><div class="diag-kv-label">${liveLabels[k]}</div><div class="diag-kv-value ${isActive ? 'active' : v != null ? '' : 'fallback'}">${fmtPrice(v)}</div></div>`;
     }).join('');
+
+    // RTDS Health
+    const rtdsAge = live.rtds_last_tick_age_ms;
+    const rtdsCount = live.rtds_tick_count_5m || 0;
+    const rtdsHealthClass = rtdsAge !== null && rtdsAge < 10000 ? 'ok' : rtdsAge !== null ? 'warn' : 'fallback';
+    const rtdsHealthLabel = rtdsAge !== null ? `${rtdsCount} ticks / 5m` : 'disconnected';
 
     // 3. Recent Signals
     diagSignalsData = d.recent_signals || [];
@@ -3707,6 +3713,10 @@ async function loadDiagnostics() {
       <div class="diag-section">
         <div class="diag-section-title">Live Prices</div>
         <div class="diag-kv">${liveHTML}</div>
+        <div class="diag-kv-item">
+          <div class="diag-kv-label">RTDS Health</div>
+          <div class="diag-kv-value ${rtdsHealthClass}">${rtdsHealthLabel}</div>
+        </div>
       </div>
       <div class="diag-section">
         <div class="diag-section-title">TWAP vs Single Tick</div>
