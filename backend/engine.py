@@ -546,14 +546,26 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
         suggested_price = round((1 - odds) * discount, 2)
 
     # Strike + current price (prefer Polymarket's official priceToBeat)
-    # Price source chain: TWAP → Chainlink on-chain → Pyth → Coinbase spot → candle close
+    # Price source chain: RTDS TWAP → WSS cache → Chainlink HTTP → Pyth → Coinbase spot → candle close
     import db as _db
     now_ms_val = int(time.time() * 1000)
+
+    # Try RTDS ticks first (persistent Polymarket Chainlink stream)
     recent_ticks = _db.get_recent_price_snapshots(
         _db.get_client(), source="polymarket_rtds", symbol="BTCUSD",
         since_ms=now_ms_val - 90_000,
     )
     twap_price = compute_twap(recent_ticks, window_end_ms=now_ms_val) if len(recent_ticks) >= 2 else None
+
+    # Fallback: WSS cache (in-memory, no DB hit)
+    if twap_price is None:
+        try:
+            from chainlink_ws import get_chainlink_ws_price
+            wss_price = get_chainlink_ws_price()
+            if wss_price and wss_price > 0:
+                twap_price = wss_price
+        except ImportError:
+            pass
 
     # 1. TWAP from accumulated Polymarket WS ticks (best: same source Polymarket resolves with)
     if twap_price:

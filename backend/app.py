@@ -22,6 +22,7 @@ import netrc  # requests lazily imports this; force load before threads start
 
 from engine import generate_signal, persist_signal, resolve_previous_hour, retroactive_regrade_trades, record_price_tick
 from polymarket_rtds import start_rtds_thread
+from chainlink_ws import start_chainlink_ws_thread
 from telegram import alert_on_signal, send_hourly_summary, start_bot_listener
 
 app = Flask(__name__)
@@ -30,6 +31,7 @@ app = Flask(__name__)
 if os.environ.get("WEB_CONCURRENCY", "1") == "1":
     start_bot_listener()
     start_rtds_thread()
+    start_chainlink_ws_thread()
 
 # CORS: restrict to Vercel frontend in production, allow all in dev
 VERCEL_URL = os.environ.get("VERCEL_URL", "")
@@ -814,8 +816,10 @@ def api_diagnostics():
     # 2. Live prices from each source
     twap_ticks = db.get_recent_price_snapshots(client, "polymarket_rtds", "BTCUSD",
                                                 since_ms=now_ms - 90_000)
+    from chainlink_ws import get_chainlink_ws_price
     live = {
         "polymarket_ws_twap_60s": compute_twap(twap_ticks, now_ms) if len(twap_ticks) >= 2 else None,
+        "chainlink_ws": get_chainlink_ws_price(),
         "chainlink_onchain": get_chainlink_price(),
         "pyth": get_pyth_btc_price_value(),
         "coinbase_spot": get_spot_price(),
@@ -828,6 +832,15 @@ def api_diagnostics():
         client, "polymarket_rtds", "BTCUSD", since_ms=now_ms - 300_000
     ))
     live["rtds_last_tick_age_ms"] = rtds_health["last_tick_age_ms"]
+
+    # Chainlink WSS health info
+    from chainlink_ws import get_chainlink_ws_health
+    ws_health = get_chainlink_ws_health()
+    live["chainlink_ws_age_ms"] = ws_health["last_tick_age_ms"]
+
+    # RPC health info
+    from chainlink_fetcher import get_rpc_health
+    rpc_health = get_rpc_health()
 
     # 3. Recent signals with source
     recent_signals = db.get_recent_signals_with_source(client, limit=20)

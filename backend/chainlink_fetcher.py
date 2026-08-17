@@ -47,11 +47,33 @@ log = logging.getLogger("verge.chainlink")
 # ---------------------------------------------------------------------------
 
 FEED_ADDRESS = "0xc907E116054Ad103354f2D350FD2514433D57F6f"
-RPC_URL = os.environ.get(
-    "POLYGON_RPC_URL",
-    "https://polygon-bor-rpc.publicnode.com",
-)
 FEED_DECIMALS = 8  # read from contract, but known for BTC/USD
+
+# Multiple RPC candidates with health tracking (FrondEnt pattern)
+DEFAULT_RPC_URLS = [
+    "https://polygon-bor-rpc.publicnode.com",
+    "https://rpc.ankr.com/polygon",
+    "https://polygon.llamarpc.com",
+    "https://polygon-rpc.com",
+]
+
+def _get_rpc_urls() -> list[str]:
+    """Get RPC URLs from env vars or defaults."""
+    env_urls = os.environ.get("POLYGON_RPC_URLS", "")
+    env_single = os.environ.get("POLYGON_RPC_URL", "")
+    urls = []
+    if env_urls:
+        urls.extend(u.strip() for u in env_urls.split(",") if u.strip())
+    if env_single:
+        urls.append(env_single.strip())
+    if not urls:
+        urls = DEFAULT_RPC_URLS.copy()
+    return urls
+
+# RPC health tracking
+_rpc_health: dict[str, float] = {}  # url -> last response time (seconds)
+_preferred_rpc: str | None = None
+RPC_TIMEOUT = 1.5  # seconds per RPC call (matches FrondEnt)
 
 # AggregatorV3Interface ABI — only the functions we need
 AGGREGATOR_ABI = [
@@ -80,14 +102,37 @@ AGGREGATOR_ABI = [
 # Singleton Web3 + contract instances (avoids memory leak from repeated instantiation)
 _w3 = None
 _contract = None
+_current_rpc_url = None
+
+
+def _get_ordered_rpcs() -> list[str]:
+    """Return RPC URLs with preferred RPC first."""
+    urls = _get_rpc_urls()
+    if _preferred_rpc and _preferred_rpc in urls:
+        return [_preferred_rpc] + [u for u in urls if u != _preferred_rpc]
+    return urls
 
 
 def _get_web3():
     """Return a cached Web3 instance, creating it only on first call."""
-    global _w3
-    if _w3 is None:
-        from web3 import Web3
-        _w3 = Web3(Web3.HTTPProvider(RPC_URL, request_kwargs={"timeout": 15}))
+    global _w3, _current_rpc_url
+    if _w3 is not None:
+        return _w3
+    from web3 import Web3
+    # Try preferred RPC first, then others
+    for url in _get_ordered_rpcs():
+        try:
+            w3 = Web3(Web3.HTTPProvider(url, request_kwargs={"timeout": RPC_TIMEOUT}))
+            if w3.is_connected():
+                _w3 = w3
+                _current_rpc_url = url
+                log.info(f"Chainlink HTTP connected to {url}")
+                return _w3
+        except Exception:
+            continue
+    # Fallback to first URL (will fail gracefully in get_chainlink_price)
+    _w3 = Web3(Web3.HTTPProvider(urls[0], request_kwargs={"timeout": RPC_TIMEOUT}))
+    _current_rpc_url = urls[0]
     return _w3
 
 
@@ -110,49 +155,89 @@ def get_chainlink_price() -> Optional[float]:
     Returns the price as a float (e.g. 65000.0), or None on failure.
     The feed returns prices with 8 decimal places — this function divides
     by 10^8 to return a human-readable price.
+
+    RPC health tracking: measures response time per RPC, prefers fastest.
+    Tries multiple RPCs on failure (matches FrondEnt pattern).
     """
+    global _preferred_rpc, _w3, _contract, _current_rpc_url
+
     try:
         from web3 import Web3
     except ImportError:
         log.warning("web3 not installed — cannot read Chainlink feed")
         return None
 
-    try:
-        w3 = _get_web3()
-        if not w3.is_connected():
-            log.warning(f"Cannot connect to Polygon RPC: {RPC_URL}")
-            return None
+    # Try each RPC in order (preferred first)
+    for rpc_url in _get_ordered_rpcs():
+        try:
+            # Create fresh Web3 instance for this RPC
+            w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": RPC_TIMEOUT}))
+            if not w3.is_connected():
+                continue
 
-        contract = _get_contract()
-
-        # Read latest round data (with retry for transient RPC failures)
-        round_data = fetch_with_retry(
-            lambda: contract.functions.latestRoundData().call()
-        )
-        # round_data = (roundId, answer, startedAt, updatedAt, answeredInRound)
-        raw_price = round_data[1]
-        updated_at = round_data[3]
-
-        # Check staleness — if data is older than 1 hour, warn
-        age_seconds = int(time.time()) - updated_at
-        if age_seconds > 3600:
-            log.warning(
-                f"Chainlink feed is stale: {age_seconds}s old "
-                f"(updated_at={updated_at})"
+            contract = w3.eth.contract(
+                address=Web3.to_checksum_address(FEED_ADDRESS),
+                abi=AGGREGATOR_ABI,
             )
 
-        # Convert from 8-decimal integer to float
-        price = raw_price / (10 ** FEED_DECIMALS)
+            # Read latest round data with timing
+            t0 = time.time()
+            round_data = contract.functions.latestRoundData().call()
+            response_time = time.time() - t0
 
-        if price <= 0:
-            log.warning(f"Chainlink returned non-positive price: {price}")
-            return None
+            # Track RPC health
+            _rpc_health[rpc_url] = response_time
+            if _preferred_rpc is None or response_time < _rpc_health.get(_preferred_rpc, 999):
+                _preferred_rpc = rpc_url
+                log.info(f"Chainlink: preferred RPC now {rpc_url} ({response_time:.2f}s)")
 
-        return price
+            # Update singleton to use this RPC for future calls
+            if _current_rpc_url != rpc_url:
+                _w3 = w3
+                _contract = contract
+                _current_rpc_url = rpc_url
 
-    except Exception as e:
-        log.warning(f"Chainlink price read failed: {e}")
-        return None
+            # round_data = (roundId, answer, startedAt, updatedAt, answeredInRound)
+            raw_price = round_data[1]
+            updated_at = round_data[3]
+
+            # Check staleness — if data is older than 1 hour, warn
+            age_seconds = int(time.time()) - updated_at
+            if age_seconds > 3600:
+                log.warning(
+                    f"Chainlink feed is stale: {age_seconds}s old "
+                    f"(updated_at={updated_at})"
+                )
+
+            # Convert from 8-decimal integer to float
+            price = raw_price / (10 ** FEED_DECIMALS)
+
+            if price <= 0:
+                log.warning(f"Chainlink returned non-positive price: {price}")
+                return None
+
+            return price
+
+        except Exception as e:
+            log.debug(f"Chainlink RPC {rpc_url} failed: {e}")
+            # Reset singleton so next call tries fresh
+            _w3 = None
+            _contract = None
+            _current_rpc_url = None
+            continue
+
+    log.warning("All Chainlink RPCs failed")
+    return None
+
+
+def get_rpc_health() -> dict:
+    """Return RPC health info for diagnostics."""
+    return {
+        "preferred_rpc": _preferred_rpc,
+        "current_rpc": _current_rpc_url,
+        "response_times": {url: f"{t:.3f}s" for url, t in _rpc_health.items()},
+        "candidate_count": len(_get_rpc_urls()),
+    }
 
 
 def resample_to_bars(

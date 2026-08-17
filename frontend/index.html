@@ -3657,8 +3657,8 @@ async function loadDiagnostics() {
 
     // 2. Live Prices
     const live = d.live_prices || {};
-    const liveKeys = ['polymarket_ws_twap_60s', 'chainlink_onchain', 'pyth', 'coinbase_spot'];
-    const liveLabels = {'polymarket_ws_twap_60s': 'Chainlink RTDS', 'chainlink_onchain': 'Chainlink On-Chain', 'pyth': 'Pyth', 'coinbase_spot': 'Coinbase'};
+    const liveKeys = ['polymarket_ws_twap_60s', 'chainlink_ws', 'chainlink_onchain', 'pyth', 'coinbase_spot'];
+    const liveLabels = {'polymarket_ws_twap_60s': 'Chainlink RTDS', 'chainlink_ws': 'Chainlink WSS', 'chainlink_onchain': 'Chainlink HTTP', 'pyth': 'Pyth', 'coinbase_spot': 'Coinbase'};
     const liveHTML = liveKeys.map(k => {
       const v = live[k];
       const isActive = k === 'polymarket_ws_twap_60s' && v != null;

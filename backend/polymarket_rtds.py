@@ -28,8 +28,9 @@ log = logging.getLogger("verge.rtds")
 
 RTDS_URL = "wss://ws-live-data.polymarket.com"
 PING_INTERVAL = 5  # seconds — Polymarket requires PING every 5s
-RECONNECT_BASE = 2  # initial reconnect delay (seconds)
-RECONNECT_MAX = 15  # max reconnect delay (seconds)
+RECONNECT_BASE_MS = 500  # initial reconnect delay (ms) — matches FrondEnt
+RECONNECT_MAX_MS = 10_000  # max reconnect delay (ms)
+RECONNECT_MULTIPLIER = 1.5  # exponential backoff multiplier
 
 # Thread reference for health checks
 _rtds_thread: threading.Thread | None = None
@@ -46,15 +47,15 @@ def start_rtds_thread() -> threading.Thread:
     global _rtds_thread
 
     def _run():
-        delay = RECONNECT_BASE
+        delay_ms = RECONNECT_BASE_MS
         while True:
             try:
                 _connect_and_read()
-                delay = RECONNECT_BASE  # reset on clean exit
+                delay_ms = RECONNECT_BASE_MS  # reset on clean exit
             except Exception as e:
-                log.warning(f"RTDS dropped, reconnecting in {delay}s: {e}")
-                time.sleep(delay)
-                delay = min(delay * 2, RECONNECT_MAX)
+                log.warning(f"RTDS dropped, reconnecting in {delay_ms}ms: {e}")
+                time.sleep(delay_ms / 1000)
+                delay_ms = min(int(delay_ms * RECONNECT_MULTIPLIER), RECONNECT_MAX_MS)
 
     _rtds_thread = threading.Thread(target=_run, daemon=True, name="rtds-stream")
     _rtds_thread.start()
