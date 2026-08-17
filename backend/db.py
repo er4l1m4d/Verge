@@ -218,6 +218,7 @@ class SignalRow:
     fear_greed_value: int | None = None
     mode: str = "safe"
     price_source: str | None = None
+    reference_status: str = "estimated"  # estimated | fallback | official
     condition_id: str | None = None
     market_id: str | None = None  # numeric Gamma API market id
 
@@ -294,6 +295,7 @@ def write_signal(client: Client, row: SignalRow) -> int:
         "fear_greed_value": row.fear_greed_value,
         "mode": row.mode,
         "price_source": row.price_source,
+        "reference_status": row.reference_status,
         "condition_id": row.condition_id,
         "market_id": row.market_id,
     }
@@ -468,6 +470,37 @@ def write_window_outcome(client: Client, duration: str, window_start: int, outco
         data["resolution_agreement"] = (outcome == official_outcome)
     client.table("window_outcomes").upsert(data).execute()
     log.info(f"Wrote window_outcome duration={duration} window={window_start} outcome={outcome}")
+
+
+def write_resolution_audit(
+    client: Client,
+    window_start: int,
+    window_close: int,
+    duration: str,
+    local_outcome: str,
+    official_outcome: str | None = None,
+    strike_method: str | None = None,
+    strike_price: float | None = None,
+    twap_price: float | None = None,
+    open_price: float | None = None,
+    tick_count: int | None = None,
+) -> None:
+    """Log resolution audit entry for empirical price-to-beat validation."""
+    data = {
+        "window_start": window_start,
+        "window_close": window_close,
+        "duration": duration,
+        "local_outcome": local_outcome,
+        "strike_method": strike_method,
+        "strike_price": strike_price,
+        "twap_price": twap_price,
+        "open_price": open_price,
+        "tick_count": tick_count,
+    }
+    if official_outcome is not None:
+        data["official_outcome"] = official_outcome
+        data["agreement"] = (local_outcome == official_outcome)
+    client.table("resolution_audit").insert(data).execute()
 
 
 def get_window_outcome(client: Client, duration: str, window_start: int) -> dict | None:

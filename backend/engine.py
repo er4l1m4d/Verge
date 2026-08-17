@@ -103,6 +103,7 @@ class LiveSignal:
     divergence_signal: int = 0  # shadow mode: -1, 0, +1 (not in live score yet)
     fear_greed_value: int | None = None  # daily Fear & Greed index (0-100)
     price_source: str | None = None
+    reference_status: str = "estimated"  # estimated | fallback | official
     condition_id: str | None = None
     market_id: str | None = None  # numeric Gamma API market id (for resolution queries)
 
@@ -352,23 +353,27 @@ def get_current_price_data_for_duration(config: dict):
         # 15m path: use Chainlink on-chain feed + Binance bootstrap
         from chainlink_fetcher import get_chainlink_bars
 
-        # Read cached ticks from price_snapshots table (try RTDS first, then on-chain)
+        # Read ticks from ring buffer first (fast), fall back to DB
         cached_ticks = []
         fetch_failed = False
         try:
-            import db
-            client = db.get_client()
             since_ms = int(_time.time() * 1000) - (config["bar_lookback"] + 10) * 60_000
-            raw_ticks = db.get_price_snapshots(
-                client, source="polymarket_rtds", symbol="BTCUSD",
-                since_ms=since_ms, limit=500,
-            )
-            if len(raw_ticks) < 10:
+            from polymarket_rtds import get_rtds_ticks
+            cached_ticks = get_rtds_ticks(since_ms=since_ms)
+
+            if len(cached_ticks) < 10:
+                import db
+                client = db.get_client()
                 raw_ticks = db.get_price_snapshots(
-                    client, source="chainlink", symbol="BTC",
+                    client, source="polymarket_rtds", symbol="BTCUSD",
                     since_ms=since_ms, limit=500,
                 )
-            cached_ticks = [{"timestamp_ms": t["timestamp_ms"], "price": t["price"]} for t in raw_ticks]
+                if len(raw_ticks) < 10:
+                    raw_ticks = db.get_price_snapshots(
+                        client, source="chainlink", symbol="BTC",
+                        since_ms=since_ms, limit=500,
+                    )
+                cached_ticks = [{"timestamp_ms": t["timestamp_ms"], "price": t["price"]} for t in raw_ticks]
         except Exception as e:
             log.warning(f"Failed to read cached ticks (non-fatal): {e}")
             fetch_failed = True
@@ -550,11 +555,11 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
     import db as _db
     now_ms_val = int(time.time() * 1000)
 
-    # Try RTDS ticks first (persistent Polymarket Chainlink stream)
-    recent_ticks = _db.get_recent_price_snapshots(
-        _db.get_client(), source="polymarket_rtds", symbol="BTCUSD",
-        since_ms=now_ms_val - 90_000,
-    )
+    # Try RTDS ticks first (in-memory ring buffer, no DB hit)
+    from polymarket_rtds import get_rtds_ticks
+    raw_ticks = get_rtds_ticks(since_ms=now_ms_val - 90_000)
+    recent_ticks = [_db.PriceSnapshotRow(source="polymarket_rtds", symbol="BTCUSD",
+                                          price=p, timestamp_ms=ts) for p, ts in raw_ticks]
     twap_price = compute_twap(recent_ticks, window_end_ms=now_ms_val) if len(recent_ticks) >= 2 else None
 
     # Fallback: WSS cache (in-memory, no DB hit)
@@ -567,11 +572,13 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
         except ImportError:
             pass
 
-    # 1. TWAP from accumulated Polymarket WS ticks (best: same source Polymarket resolves with)
+    # 1. TWAP from accumulated Polymarket WS ticks (local estimate, NOT official Polymarket source)
     if twap_price:
-        current_price, price_source = twap_price, "polymarket_ws_twap_60s"
+        current_price, price_source = twap_price, "polymarket_rtds_60s_twap_estimate"
+        reference_status = "estimated"
         log.info(f"[{duration}] TWAP price: ${twap_price:,.2f} (from {len(recent_ticks)} ticks)")
     else:
+        reference_status = "fallback"
         # 2. Chainlink on-chain (direct contract read)
         from chainlink_fetcher import get_chainlink_price
         cl_price = get_chainlink_price()
@@ -678,6 +685,7 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
         divergence_signal=div_val,
         fear_greed_value=fg_value,
         price_source=price_source,
+        reference_status=reference_status,
         condition_id=condition_id,
         market_id=market.get("market_id"),
     )
@@ -728,6 +736,7 @@ def persist_signal(sig: LiveSignal) -> tuple[int | None, str]:
         fear_greed_value=sig.fear_greed_value,
         mode=mode,
         price_source=sig.price_source,
+        reference_status=sig.reference_status,
         condition_id=sig.condition_id,
         market_id=sig.market_id,
     ))
@@ -926,6 +935,40 @@ def resolve_previous_hour(duration: str = "1h") -> bool:
             # Write outcome to window_outcomes (single source of truth)
             db.write_window_outcome(client, duration, window_start, outcome,
                                     official_outcome=official_outcome)
+
+            # Resolution audit: capture strike method for empirical validation
+            try:
+                strike_method = "rtds_chainlink_tick" if duration == "15m" else "binance_candle_open"
+                if duration == "15m":
+                    audit_ticks = db.get_price_snapshots(
+                        client, source="polymarket_rtds", symbol="BTCUSD",
+                        since_ms=window_start, limit=1000,
+                    )
+                    audit_window_ticks = [t for t in audit_ticks if t["timestamp_ms"] <= close_ms]
+                    audit_open = float(audit_window_ticks[0]["price"]) if audit_window_ticks else None
+                    audit_twap = None
+                    if len(audit_window_ticks) >= 2:
+                        ws, tw = 0.0, 0.0
+                        for i, t in enumerate(audit_window_ticks):
+                            ss = max(t["timestamp_ms"], window_start)
+                            se = audit_window_ticks[i+1]["timestamp_ms"] if i+1 < len(audit_window_ticks) else close_ms
+                            d = max(0, se - ss)
+                            ws += float(t["price"]) * d
+                            tw += d
+                        audit_twap = ws / tw if tw > 0 else None
+                    db.write_resolution_audit(
+                        client, window_start, close_ms, duration, outcome,
+                        official_outcome=official_outcome, strike_method=strike_method,
+                        strike_price=audit_open, twap_price=audit_twap,
+                        open_price=audit_open, tick_count=len(audit_window_ticks),
+                    )
+                else:
+                    db.write_resolution_audit(
+                        client, window_start, close_ms, duration, outcome,
+                        official_outcome=official_outcome, strike_method=strike_method,
+                    )
+            except Exception as e:
+                log.warning(f"Resolution audit write failed (non-fatal): {e}")
 
             # If a paper trade exists for this window, resolve it with the outcome
             # Use official_outcome (Polymarket) when available — this is the ground truth.

@@ -1,19 +1,16 @@
 """Polymarket RTDS (Real-Time Data Stream) — Persistent Chainlink Price Feed.
 
 Maintains a persistent WebSocket connection to Polymarket's live data feed,
-writing every BTC tick to the price_snapshots table. This replaces the old
-short-lived WebSocket pattern with a robust, always-on connection.
-
-Polymarket's RTDS endpoint:
-  wss://ws-live-data.polymarket.com
-  Topic: crypto_prices_chainlink
-  No authentication required.
-  Must send PING every 5 seconds.
+writing every BTC tick to both an in-memory ring buffer and the price_snapshots
+table. This replaces the old short-lived WebSocket pattern with a robust,
+always-on connection.
 
 Architecture:
+  - Ring buffer (in-memory) for low-latency reads during signal generation
+  - DB writes for durable historical record
   - Daemon thread runs the main reconnection loop
   - asyncio.run() manages the WebSocket event loop (thread-safe for Flask)
-  - Exponential backoff on connection failure (2s → 15s cap)
+  - Exponential backoff on connection failure (500ms → 10s, 1.5x)
   - PING keepalive every 5 seconds
   - Defensive message parsing (multiple field name variants)
 """
@@ -23,6 +20,7 @@ import time
 import json
 import logging
 import threading
+from collections import deque
 
 log = logging.getLogger("verge.rtds")
 
@@ -36,6 +34,48 @@ RECONNECT_MULTIPLIER = 1.5  # exponential backoff multiplier
 _rtds_thread: threading.Thread | None = None
 _last_tick_ms: int = 0
 _tick_count: int = 0
+
+
+class TickRingBuffer:
+    """Thread-safe in-memory ring buffer for recent RTDS ticks.
+
+    Avoids DB round-trip on every heartbeat. DB remains the durable
+    record for historical analysis; the ring buffer is the low-latency
+    read path for live signal generation.
+    """
+
+    def __init__(self, max_age_ms: int = 120_000):
+        self._ticks: deque = deque()
+        self._lock = threading.Lock()
+        self._max_age_ms = max_age_ms
+
+    def append(self, price: float, timestamp_ms: int) -> None:
+        with self._lock:
+            self._ticks.append((price, timestamp_ms))
+            self._evict()
+
+    def recent(self, since_ms: int) -> list[tuple[float, int]]:
+        with self._lock:
+            self._evict()
+            return [(p, ts) for p, ts in self._ticks if ts >= since_ms]
+
+    def _evict(self) -> None:
+        cutoff = int(time.time() * 1000) - self._max_age_ms
+        while self._ticks and self._ticks[0][1] < cutoff:
+            self._ticks.popleft()
+
+
+# Singleton — 120s window covers 90s TWAP lookback with margin
+_rtds_buffer = TickRingBuffer(max_age_ms=120_000)
+
+
+def get_rtds_ticks(since_ms: int) -> list[dict]:
+    """Get recent RTDS ticks from ring buffer (no DB hit).
+
+    Returns list of dicts compatible with compute_twap():
+    [{"price": float, "timestamp_ms": int}, ...]
+    """
+    return [{"price": p, "timestamp_ms": ts} for p, ts in _rtds_buffer.recent(since_ms)]
 
 
 def start_rtds_thread() -> threading.Thread:
@@ -119,8 +159,10 @@ async def _ping_loop(ws):
 
 
 def _handle_tick(raw_message: str) -> None:
-    """Parse an RTDS message, extract BTC price, write to price_snapshots.
+    """Parse an RTDS message, extract BTC price, write to ring buffer + DB.
 
+    Ring buffer is the fast read path for live signal generation.
+    DB is the durable record for historical analysis.
     Defensive parsing: tries multiple field names for both price and timestamp
     since the Polymarket WS schema may change.
     """
@@ -173,9 +215,10 @@ def _handle_tick(raw_message: str) -> None:
     )
     ts_ms = _parse_timestamp(ts_raw)
 
-    # Write to database
+    # Write to ring buffer (fast, in-memory) then DB (durable record)
     import db
     try:
+        _rtds_buffer.append(price, ts_ms)
         db.write_price_snapshot_sync(
             source="polymarket_rtds",
             symbol="BTCUSD",

@@ -818,7 +818,7 @@ def api_diagnostics():
                                                 since_ms=now_ms - 90_000)
     from chainlink_ws import get_chainlink_ws_price
     live = {
-        "polymarket_ws_twap_60s": compute_twap(twap_ticks, now_ms) if len(twap_ticks) >= 2 else None,
+        "polymarket_rtds_60s_twap_estimate": compute_twap(twap_ticks, now_ms) if len(twap_ticks) >= 2 else None,
         "chainlink_ws": get_chainlink_ws_price(),
         "chainlink_onchain": get_chainlink_price(),
         "pyth": get_pyth_btc_price_value(),
@@ -853,7 +853,7 @@ def api_diagnostics():
 
     # 6. TWAP vs single-tick comparison
     last_tick = twap_ticks[-1].price if twap_ticks else None
-    twap_val = live["polymarket_ws_twap_60s"]
+    twap_val = live["polymarket_rtds_60s_twap_estimate"]
     twap_vs_tick = {
         "twap": twap_val,
         "last_single_tick": last_tick,
@@ -867,7 +867,7 @@ def api_diagnostics():
 
     # Compute Verge's best available price for comparison
     verge_price = (
-        live.get("polymarket_ws_twap_60s")
+        live.get("polymarket_rtds_60s_twap_estimate")
         or live.get("chainlink_onchain")
         or live.get("pyth")
         or live.get("coinbase_spot")
