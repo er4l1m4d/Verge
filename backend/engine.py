@@ -104,6 +104,7 @@ class LiveSignal:
     fear_greed_value: int | None = None  # daily Fear & Greed index (0-100)
     price_source: str | None = None
     condition_id: str | None = None
+    market_id: str | None = None  # numeric Gamma API market id (for resolution queries)
 
 
 def get_current_market(duration: str = "1h") -> dict | None:
@@ -202,6 +203,7 @@ def get_current_market(duration: str = "1h") -> dict | None:
                         pass
 
                 cid = market.get("conditionId")
+                mid = market.get("id")  # numeric Gamma API market id
                 if not cid:
                     log.warning(f"Market missing conditionId: question={market.get('question','')[:60]}")
                 best = {
@@ -214,6 +216,7 @@ def get_current_market(duration: str = "1h") -> dict | None:
                     "price_to_beat": price_to_beat,
                     "up_odds": up_odds,
                     "condition_id": cid,
+                    "market_id": str(mid) if mid else None,
                     # Backward compat — engine.py still uses these names
                     "hour_open_time": start_ms,
                     "hour_end_time": end_ms,
@@ -664,6 +667,7 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
         fear_greed_value=fg_value,
         price_source=price_source,
         condition_id=condition_id,
+        market_id=market.get("market_id"),
     )
 
 
@@ -713,6 +717,7 @@ def persist_signal(sig: LiveSignal) -> tuple[int | None, str]:
         mode=mode,
         price_source=sig.price_source,
         condition_id=sig.condition_id,
+        market_id=sig.market_id,
     ))
 
     # Write paper trade (only if not SKIP)
@@ -867,25 +872,26 @@ def resolve_previous_hour(duration: str = "1h") -> bool:
             # Validate against Polymarket's official resolution (best-effort)
             official_outcome = None
             try:
-                sig_resp = (
-                    client.table("signals")
-                    .select("condition_id")
-                    .eq("market_window_start", window_start)
-                    .eq("market_duration", duration)
-                    .not_.is_("condition_id", "null")
-                    .limit(1)
-                    .execute()
-                )
-                sig_rows = sig_resp.data or []
-                if not sig_rows:
-                    log.warning(
-                        f"PM resolution gate: no condition_id found for window={window_start} duration={duration}"
+                    sig_resp = (
+                        client.table("signals")
+                        .select("condition_id,market_id")
+                        .eq("market_window_start", window_start)
+                        .eq("market_duration", duration)
+                        .not_.is_("condition_id", "null")
+                        .limit(1)
+                        .execute()
                     )
-                cid = sig_rows[0].get("condition_id") if sig_rows else None
-                if cid:
-                    from polymarket_fetcher import get_polymarket_resolution
-                    log.info(f"PM resolution: querying for window={window_start} duration={duration} cid={cid[:16]}...")
-                    pm = get_polymarket_resolution(cid)
+                    sig_rows = sig_resp.data or []
+                    if not sig_rows:
+                        log.warning(
+                            f"PM resolution gate: no condition_id found for window={window_start} duration={duration}"
+                        )
+                    cid = sig_rows[0].get("condition_id") if sig_rows else None
+                    mid = sig_rows[0].get("market_id") if sig_rows else None
+                    if cid:
+                        from polymarket_fetcher import get_polymarket_resolution
+                        log.info(f"PM resolution: querying for window={window_start} duration={duration} cid={cid[:16]}... mid={mid}")
+                        pm = get_polymarket_resolution(cid, market_id=mid)
                     if pm:
                         official_outcome = pm["outcome"]
                         if official_outcome != outcome:

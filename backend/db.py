@@ -219,6 +219,7 @@ class SignalRow:
     mode: str = "safe"
     price_source: str | None = None
     condition_id: str | None = None
+    market_id: str | None = None  # numeric Gamma API market id
 
 
 @dataclass
@@ -294,6 +295,7 @@ def write_signal(client: Client, row: SignalRow) -> int:
         "mode": row.mode,
         "price_source": row.price_source,
         "condition_id": row.condition_id,
+        "market_id": row.market_id,
     }
     result = client.table("signals").insert(data).execute()
     row_id = result.data[0]["id"]

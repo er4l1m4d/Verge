@@ -141,48 +141,66 @@ if __name__ == "__main__":
             print(f"  Last:  {odds[-1]}")
 
 
-def get_polymarket_resolution(condition_id: str) -> dict | None:
+def get_polymarket_resolution(condition_id: str, market_id: str | None = None) -> dict | None:
     """Query Gamma API for a closed market's official resolution.
 
     Args:
         condition_id: The on-chain CTF condition ID from the market.
+        market_id: The numeric Gamma API market id (preferred for 15m markets).
 
     Returns:
         {"outcome": "UP"|"DOWN", "closed_time": str, "outcome_prices": list} or None
         if the market isn't resolved yet or the query fails.
     """
-    try:
-        resp = requests.get(f"{GAMMA_BASE}/markets", params={"condition_ids": condition_id}, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        # Gamma returns a list; find the matching market
-        if isinstance(data, list):
-            data = data[0] if data else {}
-        if not data.get("closed"):
-            log.warning(f"PM resolution: market {condition_id[:16]}... not closed yet")
-            return None
-        prices_raw = data.get("outcomePrices")
-        outcomes_raw = data.get("outcomes")
-        if not prices_raw or not outcomes_raw:
-            log.warning(f"PM resolution: missing prices/outcomes for {condition_id[:16]}... — keys: {list(data.keys())[:10]}")
-            return None
-        prices = json.loads(prices_raw) if isinstance(prices_raw, str) else prices_raw
-        outcomes = json.loads(outcomes_raw) if isinstance(outcomes_raw, str) else outcomes_raw
-        if not prices or not outcomes or len(prices) < 2 or len(outcomes) < 2:
-            log.warning(f"PM resolution: short arrays for {condition_id[:16]}... — prices={prices} outcomes={outcomes}")
-            return None
-        # Winner is the outcome whose price settled to ~1.0
-        winner_idx = 0 if float(prices[0]) > 0.9 else 1
-        outcome = outcomes[winner_idx].upper()
-        log.info(f"PM resolution: {condition_id[:16]}... -> {outcome}")
-        return {
-            "outcome": outcome,
-            "closed_time": data.get("closedTime"),
-            "outcome_prices": prices,
-        }
-    except Exception as e:
-        log.warning(f"PM resolution: request failed for {condition_id[:16]}...: {e}")
+    data = {}
+
+    # Strategy 1: Query by numeric market id (works for both 1h and 15m)
+    if market_id:
+        try:
+            resp = requests.get(f"{GAMMA_BASE}/markets/{market_id}", timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            log.warning(f"PM resolution: /markets/{market_id} failed: {e}")
+
+    # Strategy 2: Fallback to condition_ids query
+    if not data:
+        try:
+            resp = requests.get(f"{GAMMA_BASE}/markets", params={"condition_ids": condition_id}, timeout=10)
+            resp.raise_for_status()
+            result = resp.json()
+            if isinstance(result, list):
+                data = result[0] if result else {}
+        except Exception as e:
+            log.warning(f"PM resolution: condition_ids query failed for {condition_id[:16]}...: {e}")
+
+    if not data:
+        log.warning(f"PM resolution: no market found for cid={condition_id[:16]}... mid={market_id}")
         return None
+
+    if not data.get("closed"):
+        log.warning(f"PM resolution: market {condition_id[:16]}... not closed yet")
+        return None
+
+    prices_raw = data.get("outcomePrices")
+    outcomes_raw = data.get("outcomes")
+    if not prices_raw or not outcomes_raw:
+        log.warning(f"PM resolution: missing prices/outcomes for {condition_id[:16]}... — keys: {list(data.keys())[:10]}")
+        return None
+    prices = json.loads(prices_raw) if isinstance(prices_raw, str) else prices_raw
+    outcomes = json.loads(outcomes_raw) if isinstance(outcomes_raw, str) else outcomes_raw
+    if not prices or not outcomes or len(prices) < 2 or len(outcomes) < 2:
+        log.warning(f"PM resolution: short arrays for {condition_id[:16]}... — prices={prices} outcomes={outcomes}")
+        return None
+    # Winner is the outcome whose price settled to ~1.0
+    winner_idx = 0 if float(prices[0]) > 0.9 else 1
+    outcome = outcomes[winner_idx].upper()
+    log.info(f"PM resolution: {condition_id[:16]}... mid={market_id} -> {outcome}")
+    return {
+        "outcome": outcome,
+        "closed_time": data.get("closedTime"),
+        "outcome_prices": prices,
+    }
 
 
 def get_polymarket_live_market(series_slug: str = "btc-up-or-down-15m") -> dict | None:
