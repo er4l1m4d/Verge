@@ -257,20 +257,13 @@ def get_polymarket_live_market(series_slug: str = "btc-up-or-down-15m") -> dict 
                 ptb = metadata.get("priceToBeat")
                 price_to_beat = float(ptb) if ptb else None
 
-                # 15m fallback: compute from Chainlink ticks at window start
+                # 15m fallback: use get_15m_opening_reference (60s TWAP)
                 if price_to_beat is None and "15m" in series_slug:
                     try:
-                        import db
-                        client = db.get_client()
-                        ticks = db.get_price_snapshots(
-                            client, source="chainlink_onchain", symbol="BTC",
-                            since_ms=start_ms - 5_000, limit=10,
-                        )
-                        window_ticks = [t for t in ticks if t["timestamp_ms"] >= start_ms]
-                        if not window_ticks:
-                            window_ticks = ticks
-                        if window_ticks:
-                            price_to_beat = float(window_ticks[0]["price"])
+                        from polymarket_fetcher import get_15m_opening_reference
+                        ptb, _ = get_15m_opening_reference(start_ms)
+                        if ptb:
+                            price_to_beat = ptb
                     except Exception:
                         pass
 

@@ -204,18 +204,17 @@ def candles():
                     "close": round(float(row["close"]), 2),
                 })
 
-            # 15m strike: prefer official, then Chainlink bars' open, then Coinbase
+            # 15m strike: prefer official, then 60s TWAP at window start, then bar open
             if official_strike:
                 strike = round(official_strike, 2)
             elif market and market.get("window_open"):
-                # Try Chainlink bars first (matches Polymarket's resolution source)
-                strike_val = None
-                if len(df_recent) > 0:
+                from polymarket_fetcher import get_15m_opening_reference
+                strike_val, _ = get_15m_opening_reference(market["window_open"])
+                if strike_val is None and len(df_recent) > 0:
                     import time as _t
                     matching = df_recent[df_recent["open_time"] >= market["window_open"]]
                     if len(matching) > 0:
                         strike_val = float(matching.iloc[0]["open"])
-                # Fallback: Coinbase
                 if strike_val is None:
                     from data_fetcher import get_price_at_time
                     strike_val = get_price_at_time(market["window_open"])
