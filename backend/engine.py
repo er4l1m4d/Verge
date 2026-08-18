@@ -146,6 +146,7 @@ def get_current_market(duration: str = "1h") -> dict | None:
     now_ms = int(time.time() * 1000)
     best = None
     best_start_ms = 0
+    best_has_price_to_beat = False
 
     for event in events:
         for market in event.get("markets", []):
@@ -183,13 +184,16 @@ def get_current_market(duration: str = "1h") -> dict | None:
             if now_ms < start_ms or now_ms >= end_ms:
                 continue
 
-            # Pick the one with the latest start time (most recent window)
-            if start_ms > best_start_ms:
-                best_start_ms = start_ms
+            # Extract priceToBeat from event metadata (Polymarket's official strike)
+            metadata = event.get("eventMetadata") or {}
+            price_to_beat = metadata.get("priceToBeat")
+            has_ptb = price_to_beat is not None and str(price_to_beat).strip() != ""
 
-                # Extract priceToBeat from event metadata (Polymarket's official strike)
-                metadata = event.get("eventMetadata") or {}
-                price_to_beat = metadata.get("priceToBeat")
+            # Prefer events with priceToBeat; among same tier, pick latest start
+            if best is None or (has_ptb and not best_has_price_to_beat) or \
+               (has_ptb == best_has_price_to_beat and start_ms > best_start_ms):
+                best_start_ms = start_ms
+                best_has_price_to_beat = has_ptb
 
                 # Extract outcomePrices from market (Polymarket's official odds)
                 # Format: "[\"0.9995\", \"0.0005\"]" — first is "Up" probability
