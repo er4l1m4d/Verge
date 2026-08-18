@@ -292,10 +292,13 @@ def get_15m_opening_reference(window_start_ms: int) -> tuple[float | None, str]:
 
     Tries multiple sources in order:
       1. Gamma API eventMetadata.priceToBeat (official, if available)
-      2. RTDS tick at window start (ring buffer, fast)
-      3. On-chain Chainlink tick at window start (DB)
+      2. RTDS 60s TWAP at window start (ring buffer, closest to Polymarket's method)
+      3. On-chain Chainlink 60s TWAP at window start (DB)
       4. Binance 1m candle open at window start
       5. Coinbase spot at window start
+
+    For sources 2-3, computes a 60s TWAP centered on window_start_ms
+    to match Polymarket's Chainlink TWAP 60s resolution methodology.
 
     Returns (price, source_label) or (None, "none").
     """
@@ -322,7 +325,6 @@ def get_15m_opening_reference(window_start_ms: int) -> tuple[float | None, str]:
                 event_start_ms = int(start_dt.timestamp() * 1000)
             except (ValueError, TypeError):
                 continue
-            # Match the window (within 15min tolerance)
             if abs(event_start_ms - window_start_ms) > 900_000:
                 continue
             metadata = event.get("eventMetadata") or {}
@@ -335,32 +337,37 @@ def get_15m_opening_reference(window_start_ms: int) -> tuple[float | None, str]:
     except Exception:
         pass
 
-    # 2. RTDS tick at window start (ring buffer, no DB hit)
+    # 2. RTDS 60s TWAP at window start (ring buffer, no DB hit)
     try:
         from polymarket_rtds import get_rtds_ticks
-        ticks = get_rtds_ticks(since_ms=window_start_ms - 5_000)
-        at_open = [t for t in ticks if t["timestamp_ms"] >= window_start_ms]
-        if at_open:
-            return at_open[0]["price"], "rtds_chainlink_tick"
-        before_open = [t for t in ticks if t["timestamp_ms"] < window_start_ms]
-        if before_open:
-            return before_open[-1]["price"], "rtds_chainlink_tick"
+        from engine import compute_twap, PriceSnapshotRow
+        ticks = get_rtds_ticks(since_ms=window_start_ms - 65_000)
+        if ticks:
+            rows = [PriceSnapshotRow(source="rtds_chainlink", symbol="BTCUSD",
+                                     price=t["price"], timestamp_ms=t["timestamp_ms"])
+                    for t in ticks]
+            twap = compute_twap(rows, window_end_ms=window_start_ms, window_seconds=60)
+            if twap:
+                return twap, "rtds_chainlink_twap_60s"
     except ImportError:
         pass
 
-    # 3. On-chain Chainlink tick at window start (DB)
+    # 3. On-chain Chainlink 60s TWAP at window start (DB)
     try:
         import db
+        from engine import compute_twap, PriceSnapshotRow
         client = db.get_client()
         ticks = db.get_price_snapshots(
             client, source="chainlink_onchain", symbol="BTC",
-            since_ms=window_start_ms - 5_000, limit=10,
+            since_ms=window_start_ms - 65_000, limit=100,
         )
-        at_open = [t for t in ticks if t["timestamp_ms"] >= window_start_ms]
-        if at_open:
-            return float(at_open[0]["price"]), "chainlink_onchain_tick"
         if ticks:
-            return float(ticks[-1]["price"]), "chainlink_onchain_tick"
+            rows = [PriceSnapshotRow(source="chainlink_onchain", symbol="BTC",
+                                     price=float(t["price"]), timestamp_ms=t["timestamp_ms"])
+                    for t in ticks]
+            twap = compute_twap(rows, window_end_ms=window_start_ms, window_seconds=60)
+            if twap:
+                return twap, "chainlink_onchain_twap_60s"
     except Exception:
         pass
 

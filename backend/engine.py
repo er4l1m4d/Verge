@@ -1060,9 +1060,23 @@ def _resolve_via_chainlink_ticks(client, window_start: int, window_close: int) -
             window_ticks = [t for t in ticks if t["timestamp_ms"] <= window_close]
 
             if len(window_ticks) >= 2:
-                open_price = float(window_ticks[0]["price"])
+                # Compute 60s TWAP at window start (matches Polymarket's opening reference)
+                open_window_start = window_start - 60_000
+                open_ticks = [t for t in window_ticks if t["timestamp_ms"] >= open_window_start
+                              and t["timestamp_ms"] <= window_start + 5_000]
+                if len(open_ticks) >= 2:
+                    ow_sum, ow_weight = 0.0, 0.0
+                    for i, t in enumerate(open_ticks):
+                        ss = max(t["timestamp_ms"], open_window_start)
+                        se = open_ticks[i+1]["timestamp_ms"] if i+1 < len(open_ticks) else window_start
+                        d = max(0, se - ss)
+                        ow_sum += float(t["price"]) * d
+                        ow_weight += d
+                    open_price = ow_sum / ow_weight if ow_weight > 0 else float(open_ticks[0]["price"])
+                else:
+                    open_price = float(window_ticks[0]["price"])
 
-                # Compute TWAP (time-weighted average) — matches Polymarket's resolution
+                # Compute full-window TWAP (Polymarket's resolution comparison)
                 weighted_sum, total_weight = 0.0, 0.0
                 for i, tick in enumerate(window_ticks):
                     seg_start = max(tick["timestamp_ms"], window_start)
