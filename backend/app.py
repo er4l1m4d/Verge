@@ -814,7 +814,7 @@ def api_diagnostics():
     source_stats = db.get_source_breakdown(client, since_ms=now_ms - 86_400_000)
 
     # 2. Live prices from each source
-    twap_ticks = db.get_recent_price_snapshots(client, "polymarket_rtds", "BTCUSD",
+    twap_ticks = db.get_recent_price_snapshots(client, "rtds_chainlink", "BTCUSD",
                                                 since_ms=now_ms - 90_000)
     from chainlink_ws import get_chainlink_ws_price
     live = {
@@ -829,7 +829,7 @@ def api_diagnostics():
     from polymarket_rtds import get_rtds_health
     rtds_health = get_rtds_health()
     live["rtds_tick_count_5m"] = len(db.get_recent_price_snapshots(
-        client, "polymarket_rtds", "BTCUSD", since_ms=now_ms - 300_000
+        client, "rtds_chainlink", "BTCUSD", since_ms=now_ms - 300_000
     ))
     live["rtds_last_tick_age_ms"] = rtds_health["last_tick_age_ms"]
 
@@ -896,8 +896,52 @@ def api_diagnostics():
         "resolution_agreement": resolution_agreement,
         "twap_vs_tick": twap_vs_tick,
         "polymarket_live": polymarket_live,
+        "source_comparison": _source_comparison(client, now_ms),
         "timestamp": now_ms,
     })
+
+
+def _source_comparison(client, now_ms: int) -> list[dict]:
+    """Timestamp-aligned comparison of RTDS vs on-chain Chainlink prices.
+
+    Returns last 5 observations where both sources have data within 2s of each other.
+    """
+    import db
+
+    rtds_ticks = db.get_recent_price_snapshots(
+        client, "rtds_chainlink", "BTCUSD", since_ms=now_ms - 60_000, limit=50,
+    )
+    cl_ticks = db.get_recent_price_snapshots(
+        client, "chainlink_onchain", "BTC", since_ms=now_ms - 60_000, limit=50,
+    )
+
+    if not rtds_ticks or not cl_ticks:
+        return []
+
+    # Build timestamp-indexed lookups
+    cl_by_ts = {t.timestamp_ms: t.price for t in cl_ticks}
+
+    comparisons = []
+    for rt in reversed(rtds_ticks):
+        # Find closest on-chain tick within 2s
+        best_ts = min(cl_by_ts.keys(), key=lambda ts: abs(ts - rt.timestamp_ms), default=None)
+        if best_ts is None:
+            continue
+        if abs(best_ts - rt.timestamp_ms) > 2000:
+            continue
+        delta = rt.price - cl_by_ts[best_ts]
+        comparisons.append({
+            "rtds_ts": rt.timestamp_ms,
+            "chainlink_ts": best_ts,
+            "rtds_price": rt.price,
+            "chainlink_price": cl_by_ts[best_ts],
+            "delta": round(delta, 2),
+            "delta_pct": round(delta / cl_by_ts[best_ts] * 100, 4) if cl_by_ts[best_ts] else None,
+        })
+        if len(comparisons) >= 5:
+            break
+
+    return comparisons
 
 
 if __name__ == "__main__":

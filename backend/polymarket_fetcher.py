@@ -263,7 +263,7 @@ def get_polymarket_live_market(series_slug: str = "btc-up-or-down-15m") -> dict 
                         import db
                         client = db.get_client()
                         ticks = db.get_price_snapshots(
-                            client, source="chainlink", symbol="BTC",
+                            client, source="chainlink_onchain", symbol="BTC",
                             since_ms=start_ms - 5_000, limit=10,
                         )
                         window_ticks = [t for t in ticks if t["timestamp_ms"] >= start_ms]
@@ -285,3 +285,75 @@ def get_polymarket_live_market(series_slug: str = "btc-up-or-down-15m") -> dict 
     except Exception:
         pass
     return None
+
+
+def get_15m_opening_reference(window_start_ms: int) -> tuple[float | None, str]:
+    """Recover the opening reference price for a 15m window.
+
+    For 15m markets, priceToBeat is never in Gamma API. This function
+    tries multiple sources to recover the official opening reference.
+
+    Returns (price, source_label) or (None, "none").
+
+    Resolution cascade:
+      1. RTDS tick at window start (ring buffer, fast)
+      2. On-chain Chainlink tick at window start (DB)
+      3. Binance 1m candle open at window start
+      4. Coinbase spot at window start
+    """
+    import time
+    now_ms = int(time.time() * 1000)
+
+    # 1. RTDS tick at window start (ring buffer, no DB hit)
+    try:
+        from polymarket_rtds import get_rtds_ticks
+        ticks = get_rtds_ticks(since_ms=window_start_ms - 5_000)
+        at_open = [t for t in ticks if t["timestamp_ms"] >= window_start_ms]
+        if at_open:
+            return at_open[0]["price"], "rtds_chainlink_tick"
+        # If no tick at exact window start, use closest before
+        before_open = [t for t in ticks if t["timestamp_ms"] < window_start_ms]
+        if before_open:
+            return before_open[-1]["price"], "rtds_chainlink_tick"
+    except ImportError:
+        pass
+
+    # 2. On-chain Chainlink tick at window start (DB)
+    try:
+        import db
+        client = db.get_client()
+        ticks = db.get_price_snapshots(
+            client, source="chainlink_onchain", symbol="BTC",
+            since_ms=window_start_ms - 5_000, limit=10,
+        )
+        at_open = [t for t in ticks if t["timestamp_ms"] >= window_start_ms]
+        if at_open:
+            return float(at_open[0]["price"]), "chainlink_onchain_tick"
+        if ticks:
+            return float(ticks[-1]["price"]), "chainlink_onchain_tick"
+    except Exception:
+        pass
+
+    # 3. Binance 1m candle open at window start
+    try:
+        from data_fetcher import get_binance_klines
+        df = get_binance_klines(
+            symbol="BTCUSDT", interval="1m",
+            start_time=window_start_ms, end_time=window_start_ms + 60_000,
+            limit=2,
+        )
+        if df is not None and len(df) > 0:
+            return float(df.iloc[0]["open"]), "binance_1m_candle_open"
+    except Exception:
+        pass
+
+    # 4. Coinbase spot at window start
+    try:
+        from data_fetcher import get_price_at_time
+        price = get_price_at_time(window_start_ms)
+        if price:
+            return price, "coinbase_spot"
+    except Exception:
+        pass
+
+    return None, "none"

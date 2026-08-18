@@ -365,12 +365,12 @@ def get_current_price_data_for_duration(config: dict):
                 import db
                 client = db.get_client()
                 raw_ticks = db.get_price_snapshots(
-                    client, source="polymarket_rtds", symbol="BTCUSD",
+                    client, source="rtds_chainlink", symbol="BTCUSD",
                     since_ms=since_ms, limit=500,
                 )
                 if len(raw_ticks) < 10:
                     raw_ticks = db.get_price_snapshots(
-                        client, source="chainlink", symbol="BTC",
+                        client, source="chainlink_onchain", symbol="BTC",
                         since_ms=since_ms, limit=500,
                     )
                 cached_ticks = [{"timestamp_ms": t["timestamp_ms"], "price": t["price"]} for t in raw_ticks]
@@ -558,7 +558,7 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
     # Try RTDS ticks first (in-memory ring buffer, no DB hit)
     from polymarket_rtds import get_rtds_ticks
     raw_ticks = get_rtds_ticks(since_ms=now_ms_val - 90_000)
-    recent_ticks = [_db.PriceSnapshotRow(source="polymarket_rtds", symbol="BTCUSD",
+    recent_ticks = [_db.PriceSnapshotRow(source="rtds_chainlink", symbol="BTCUSD",
                                           price=p, timestamp_ms=ts) for p, ts in raw_ticks]
     twap_price = compute_twap(recent_ticks, window_end_ms=now_ms_val) if len(recent_ticks) >= 2 else None
 
@@ -609,8 +609,13 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
     if strike_price is not None:
         log.info(f"[{duration}] Using official Polymarket strike: ${strike_price:,.2f}")
     elif duration == "15m":
-        # 15m markets never have eventMetadata.priceToBeat — skip extraction chain
-        log.debug(f"[15m] No official Polymarket strike (expected), computing from Chainlink bars")
+        # 15m: Use multi-source opening reference recovery
+        from polymarket_fetcher import get_15m_opening_reference
+        strike_price, strike_source = get_15m_opening_reference(hour_open_time or int(time.time() * 1000))
+        if strike_price is not None:
+            log.info(f"[15m] Strike from {strike_source}: ${strike_price:,.2f}")
+        else:
+            log.warning(f"[15m] No opening reference available from any source")
     else:
         # 1h: Recursive key search + text parsing fallback
         strike_price = extract_strike_from_market(market)
@@ -622,32 +627,7 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
                 log.info(f"[{duration}] Strike from text parsing: ${strike_price:,.2f}")
 
     if strike_price is None:
-        if duration == "15m" and hour_open_time is not None:
-            # 15m: Prefer Chainlink bars' open (matches Polymarket's resolution source)
-            if len(df_price) > 0:
-                log.info(
-                    f"[15m] df_price: {len(df_price)} bars, "
-                    f"open_time range: {df_price['open_time'].min()}-{df_price['open_time'].max()}, "
-                    f"target: {hour_open_time}"
-                )
-                matching = df_price[df_price["open_time"] >= hour_open_time]
-                if len(matching) > 0:
-                    strike_price = float(matching.iloc[0]["open"])
-                    log.info(f"[15m] Strike from Chainlink bars: ${strike_price:,.2f}")
-                else:
-                    log.warning(
-                        f"[15m] No Chainlink bar with open_time >= {hour_open_time} "
-                        f"(bars end at {df_price['open_time'].max()})"
-                    )
-            # Fallback: Coinbase if Chainlink bars unavailable
-            if strike_price is None:
-                from data_fetcher import get_price_at_time
-                strike_price = get_price_at_time(hour_open_time)
-                if strike_price:
-                    log.info(f"[15m] Strike from Coinbase fallback: ${strike_price:,.2f}")
-                else:
-                    log.warning(f"[15m] Coinbase fallback also failed for hour_open_time={hour_open_time}")
-        elif hour_open_time is not None and len(df_price) > 0:
+        if hour_open_time is not None and len(df_price) > 0:
             # 1h fallback: compute from first candle in window
             matching = df_price[df_price["open_time"] >= hour_open_time]
             if len(matching) > 0:
@@ -790,7 +770,7 @@ def record_price_tick(duration: str = "15m") -> bool:
         db.write_price_snapshot(
             client,
             db.PriceSnapshotRow(
-                source="chainlink",
+                source="chainlink_onchain",
                 symbol="BTC",
                 timestamp_ms=int(time.time() * 1000),
                 price=price,
@@ -802,38 +782,6 @@ def record_price_tick(duration: str = "15m") -> bool:
     except Exception as e:
         log.warning(f"Price tick recording failed: {e}")
         return False
-
-
-def record_polymarket_ws_tick() -> bool:
-    """DEPRECATED: RTDS handles continuous tick collection.
-
-    Kept for reference. Do not call from heartbeat.
-    The polymarket_rtds module maintains a persistent connection that
-    continuously writes ticks, making this short-lived approach unnecessary.
-
-    Returns True if a tick was written, False on failure.
-    """
-    try:
-        from data_fetcher import get_polymarket_chainlink_price
-        import db
-
-        result = asyncio.run(
-            get_polymarket_chainlink_price(timeout_s=4.0)
-        )
-        if result:
-            price, ts = result
-            ts_ms = ts if ts else int(time.time() * 1000)
-            db.write_price_snapshot_sync(
-                source="polymarket_ws_tick",
-                symbol="BTCUSD",
-                price=float(price),
-                timestamp_ms=ts_ms,
-            )
-            log.info(f"Recorded Polymarket WS tick: ${price:,.2f}")
-            return True
-    except Exception as e:
-        log.warning(f"Polymarket WS tick record failed (non-fatal): {e}")
-    return False
 
 
 def resolve_previous_hour(duration: str = "1h") -> bool:
@@ -941,7 +889,7 @@ def resolve_previous_hour(duration: str = "1h") -> bool:
                 strike_method = "rtds_chainlink_tick" if duration == "15m" else "binance_candle_open"
                 if duration == "15m":
                     audit_ticks = db.get_price_snapshots(
-                        client, source="polymarket_rtds", symbol="BTCUSD",
+                        client, source="rtds_chainlink", symbol="BTCUSD",
                         since_ms=window_start, limit=1000,
                     )
                     audit_window_ticks = [t for t in audit_ticks if t["timestamp_ms"] <= close_ms]
@@ -1103,7 +1051,7 @@ def _resolve_via_chainlink_ticks(client, window_start: int, window_close: int) -
     import db
 
     # 1. Try RTDS Chainlink ticks first (highest density), then on-chain Chainlink
-    for source, symbol in [("polymarket_rtds", "BTCUSD"), ("chainlink", "BTC")]:
+    for source, symbol in [("rtds_chainlink", "BTCUSD"), ("chainlink_onchain", "BTC")]:
         try:
             ticks = db.get_price_snapshots(
                 client, source=source, symbol=symbol,
@@ -1218,65 +1166,3 @@ def compute_twap(ticks: list["PriceSnapshotRow"], window_end_ms: int, window_sec
         total_weight += duration
 
     return weighted_sum / total_weight if total_weight > 0 else ticks[-1].price
-
-
-def start_ws_tick_accumulator() -> None:
-    """DEPRECATED: Use polymarket_rtds.start_rtds_thread() instead.
-
-    Kept for reference. Do not call from app.py.
-    The RTDS module provides a more robust, always-on connection with
-    proper PING keepalive and exponential-backoff reconnection.
-    """
-    import threading
-
-    def _run():
-        delay = 2
-        while True:
-            try:
-                asyncio.run(_accumulate_ticks())
-                delay = 2  # reset on successful run (connection closed normally)
-            except Exception as e:
-                log.warning(f"WS tick accumulator dropped, reconnecting in {delay}s: {e}")
-                time.sleep(delay)
-                delay = min(delay * 2, 15)
-
-    thread = threading.Thread(target=_run, daemon=True, name="ws-tick-accumulator")
-    thread.start()
-    log.info("WS tick accumulator started")
-
-
-async def _accumulate_ticks():
-    """Persistent WebSocket connection that writes every BTC tick to the DB."""
-    import asyncio
-    import json
-    import websockets
-    import db
-
-    url = "wss://ws-live-data.polymarket.com"
-    async with websockets.connect(url, open_timeout=10) as ws:
-        await ws.send(json.dumps({
-            "action": "subscribe",
-            "subscriptions": [{"topic": "crypto_prices_chainlink", "type": "*", "filters": ""}],
-        }))
-        log.info("WS tick accumulator connected, listening for BTC ticks")
-        async for raw in ws:
-            try:
-                data = json.loads(raw)
-            except (json.JSONDecodeError, ValueError):
-                continue
-            if data.get("topic") != "crypto_prices_chainlink":
-                continue
-            payload = data.get("payload") or {}
-            symbol = str(payload.get("symbol") or payload.get("pair") or "").lower()
-            if "btc" not in symbol:
-                continue
-            price = payload.get("value") or payload.get("price")
-            ts = payload.get("timestamp") or payload.get("updatedAt")
-            if price is not None:
-                ts_ms = int(float(ts) * 1000) if ts else int(time.time() * 1000)
-                db.write_price_snapshot_sync(
-                    source="polymarket_ws_tick",
-                    symbol="BTCUSD",
-                    price=float(price),
-                    timestamp_ms=ts_ms,
-                )

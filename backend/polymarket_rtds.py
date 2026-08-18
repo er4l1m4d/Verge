@@ -220,7 +220,7 @@ def _handle_tick(raw_message: str) -> None:
     try:
         _rtds_buffer.append(price, ts_ms)
         db.write_price_snapshot_sync(
-            source="polymarket_rtds",
+            source="rtds_chainlink",
             symbol="BTCUSD",
             price=price,
             timestamp_ms=ts_ms,

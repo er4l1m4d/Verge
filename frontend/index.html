@@ -3658,7 +3658,7 @@ async function loadDiagnostics() {
     // 2. Live Prices
     const live = d.live_prices || {};
     const liveKeys = ['polymarket_rtds_60s_twap_estimate', 'chainlink_ws', 'chainlink_onchain', 'pyth', 'coinbase_spot'];
-    const liveLabels = {'polymarket_rtds_60s_twap_estimate': 'RTDS TWAP (est.)', 'chainlink_ws': 'Chainlink WSS', 'chainlink_onchain': 'Chainlink HTTP', 'pyth': 'Pyth', 'coinbase_spot': 'Coinbase'};
+    const liveLabels = {'polymarket_rtds_60s_twap_estimate': 'RTDS Chainlink', 'chainlink_ws': 'Chainlink WSS', 'chainlink_onchain': 'Chainlink HTTP', 'pyth': 'Pyth', 'coinbase_spot': 'Coinbase'};
     const liveHTML = liveKeys.map(k => {
       const v = live[k];
       const isActive = k === 'polymarket_rtds_60s_twap_estimate' && v != null;
@@ -3690,6 +3690,14 @@ async function loadDiagnostics() {
     const diffPct = tv.difference_pct;
     const diffClass = diffPct != null ? (diffPct < 0.1 ? 'ok' : 'warn') : '';
     const diffHTML = diffPct != null ? `<span class="diff ${diffClass}">${diffPct.toFixed(4)}%</span>` : '<span class="diff">—</span>';
+
+    // 6. Source Comparison (timestamp-aligned)
+    const sc = d.source_comparison || [];
+    const scRows = sc.map(c => {
+      const ts = new Date(c.rtds_ts).toLocaleTimeString('en-US', {hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false,timeZone:'America/New_York'});
+      const deltaClass = Math.abs(c.delta) < 5 ? 'ok' : Math.abs(c.delta) < 50 ? 'warn' : 'warn';
+      return `<tr><td>${ts}</td><td>${fmtPrice(c.rtds_price)}</td><td>${fmtPrice(c.chainlink_price)}</td><td class="${deltaClass}">${c.delta >= 0 ? '+' : ''}$${c.delta.toFixed(2)}</td></tr>`;
+    }).join('') || '<tr><td colspan="4" class="diag-empty">Collecting comparison data...</td></tr>';
 
     // Resolution Agreement (Verge vs Polymarket)
     const raData = d.resolution_agreement || [];
@@ -3725,6 +3733,10 @@ async function loadDiagnostics() {
           <div><div class="label">Last Tick</div><div class="val">${fmtPrice(tv.last_single_tick)}</div></div>
           ${diffHTML}
         </div>
+      </div>
+      <div class="diag-section">
+        <div class="diag-section-title">Feed Comparison (RTDS vs Chainlink)</div>
+        <table class="diag-table"><thead><tr><th>Time</th><th>RTDS</th><th>Chainlink</th><th>Delta</th></tr></thead><tbody>${scRows}</tbody></table>
       </div>
       <div class="diag-section">
         <div class="diag-section-title">Source Breakdown (24h)</div>
