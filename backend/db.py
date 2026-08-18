@@ -221,6 +221,9 @@ class SignalRow:
     reference_status: str = "estimated"  # estimated | fallback | official
     condition_id: str | None = None
     market_id: str | None = None  # numeric Gamma API market id
+    strike_source: str | None = None  # which source produced the strike price
+    reference_age_ms: int | None = None  # age of reference price at signal time
+    quality_status: str = "estimated"  # good | degraded | fallback | estimated
 
 
 @dataclass
@@ -298,6 +301,9 @@ def write_signal(client: Client, row: SignalRow) -> int:
         "reference_status": row.reference_status,
         "condition_id": row.condition_id,
         "market_id": row.market_id,
+        "strike_source": row.strike_source,
+        "reference_age_ms": row.reference_age_ms,
+        "quality_status": row.quality_status,
     }
     result = client.table("signals").insert(data).execute()
     row_id = result.data[0]["id"]
@@ -1192,3 +1198,64 @@ def get_resolution_agreement(client: Client) -> list[dict]:
         }
         for dur, s in sorted(by_dur.items())
     ]
+
+
+def get_resolution_audit_summary(client: Client) -> list[dict]:
+    """Summarize resolution_audit by strike_method: count, avg tick_count, agreement rates."""
+    resp = (
+        client.table("resolution_audit")
+        .select("strike_method,duration,agreement,tick_count,strike_price,twap_price")
+        .execute()
+    )
+    rows = resp.data or []
+    by_method: dict[str, dict] = {}
+    for r in rows:
+        method = r.get("strike_method") or "unknown"
+        if method not in by_method:
+            by_method[method] = {
+                "strike_method": method,
+                "total": 0, "agreements": 0, "disagreements": 0,
+                "avg_tick_count": 0, "tick_counts": [],
+            }
+        by_method[method]["total"] += 1
+        if r.get("agreement"):
+            by_method[method]["agreements"] += 1
+        else:
+            by_method[method]["disagreements"] += 1
+        if r.get("tick_count"):
+            by_method[method]["tick_counts"].append(r["tick_count"])
+    result = []
+    for method, s in sorted(by_method.items()):
+        tcs = s.pop("tick_counts")
+        s["avg_tick_count"] = round(sum(tcs) / len(tcs), 1) if tcs else 0
+        s["agreement_pct"] = round(s["agreements"] / s["total"] * 100, 1) if s["total"] > 0 else 0
+        result.append(s)
+    return result
+
+
+def get_strike_source_distribution(client: Client) -> list[dict]:
+    """Distribution of strike_source values from recent signals."""
+    resp = (
+        client.table("signals")
+        .select("strike_source,quality_status,market_duration")
+        .not_.is_("strike_source", "null")
+        .order("id", desc=True)
+        .limit(200)
+        .execute()
+    )
+    rows = resp.data or []
+    by_source: dict[str, dict] = {}
+    for r in rows:
+        src = r.get("strike_source") or "unknown"
+        qual = r.get("quality_status") or "estimated"
+        dur = r.get("market_duration") or "1h"
+        key = f"{src}|{qual}|{dur}"
+        if key not in by_source:
+            by_source[key] = {
+                "strike_source": src,
+                "quality_status": qual,
+                "duration": dur,
+                "count": 0,
+            }
+        by_source[key]["count"] += 1
+    return sorted(by_source.values(), key=lambda x: -x["count"])

@@ -106,6 +106,9 @@ class LiveSignal:
     reference_status: str = "estimated"  # estimated | fallback | official
     condition_id: str | None = None
     market_id: str | None = None  # numeric Gamma API market id (for resolution queries)
+    strike_source: str | None = None  # which source produced the strike price
+    reference_age_ms: int | None = None  # age of reference price at signal time
+    quality_status: str = "estimated"  # good | degraded | fallback | estimated
 
 
 def get_current_market(duration: str = "1h") -> dict | None:
@@ -610,7 +613,9 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
 
     # Use Polymarket's official strike if available, else compute from candles
     strike_price = market.get("price_to_beat")
+    strike_source = None
     if strike_price is not None:
+        strike_source = "gamma_price_to_beat"
         log.info(f"[{duration}] Using official Polymarket strike: ${strike_price:,.2f}")
     elif duration == "15m":
         # 15m: Use multi-source opening reference recovery
@@ -624,10 +629,12 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
         # 1h: Recursive key search + text parsing fallback
         strike_price = extract_strike_from_market(market)
         if strike_price is not None:
+            strike_source = "gamma_recursive_search"
             log.info(f"[{duration}] Strike from recursive key search: ${strike_price:,.2f}")
         else:
             strike_price = parse_strike_from_text(market)
             if strike_price is not None:
+                strike_source = "gamma_text_parse"
                 log.info(f"[{duration}] Strike from text parsing: ${strike_price:,.2f}")
 
     if strike_price is None:
@@ -639,10 +646,41 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
             else:
                 strike_price = float(df_price.iloc[0]["open"])
             if strike_price:
+                strike_source = "binance_candle"
                 log.info(f"[{duration}] Strike from Binance candles: ${strike_price:,.2f}")
 
     if strike_price is None:
         log.warning(f"[{duration}] No strike price available from any source")
+
+    # Derive quality_status from strike_source trust tier
+    _GOOD_SOURCES = {"gamma_price_to_beat", "rtds_twap_60s"}
+    _DEGRADED_SOURCES = {"chainlink_onchain_twap_60s", "gamma_recursive_search", "gamma_text_parse"}
+    _FALLBACK_SOURCES = {"binance_candle", "coinbase_spot", "candle_close"}
+    if strike_source in _GOOD_SOURCES:
+        quality_status = "good"
+    elif strike_source in _DEGRADED_SOURCES:
+        quality_status = "degraded"
+    elif strike_source in _FALLBACK_SOURCES:
+        quality_status = "fallback"
+    else:
+        quality_status = "estimated"
+
+    # Compute reference_age_ms: age of the current price reference at signal time
+    reference_age_ms = None
+    if price_source and current_price:
+        now_ms = int(time.time() * 1000)
+        # Use the latest price snapshot's timestamp as reference point
+        try:
+            import db as _db
+            _client = _db.get_client()
+            _snaps = _db.get_price_snapshots(
+                _client, source=price_source, symbol="BTCUSD" if "chainlink" in price_source else "BTC",
+                since_ms=now_ms - 30_000, limit=1,
+            )
+            if _snaps:
+                reference_age_ms = now_ms - _snaps[-1]["timestamp_ms"]
+        except Exception:
+            pass
 
     return LiveSignal(
         decision=sig.decision,
@@ -672,6 +710,9 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
         reference_status=reference_status,
         condition_id=condition_id,
         market_id=market.get("market_id"),
+        strike_source=strike_source,
+        reference_age_ms=reference_age_ms,
+        quality_status=quality_status,
     )
 
 
@@ -723,6 +764,9 @@ def persist_signal(sig: LiveSignal) -> tuple[int | None, str]:
         reference_status=sig.reference_status,
         condition_id=sig.condition_id,
         market_id=sig.market_id,
+        strike_source=sig.strike_source,
+        reference_age_ms=sig.reference_age_ms,
+        quality_status=sig.quality_status,
     ))
 
     # Write paper trade (only if not SKIP)

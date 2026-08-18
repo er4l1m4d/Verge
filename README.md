@@ -40,11 +40,14 @@ Verge uses a layered price source chain, preferring the source closest to what P
 
 | Priority | Source | Method | Latency |
 |---|---|---|---|
-| 1 | **Polymarket WS TWAP** | 60-second time-weighted average from live WebSocket ticks | ~5 min (heartbeat) |
-| 2 | **Chainlink on-chain** | Direct Polygon RPC contract read | ~5 min |
-| 3 | **Pyth oracle** | Free Pyth Network API | ~5 min |
-| 4 | **Coinbase spot** | Coinbase ticker API | ~5 min |
-| 5 | **Candle close** | Last 5m candle close | ~5 min |
+| 1 | **RTDS Chainlink** | 60-second TWAP from Polymarket's live Chainlink data stream | ~100ms |
+| 2 | **Chainlink WSS** | On-chain Chainlink `AnswerUpdated` events via Polygon WSS | ~2s |
+| 3 | **Chainlink on-chain** | Direct Polygon RPC contract read | ~5s |
+| 4 | **Pyth oracle** | Free Pyth Network API | ~5s |
+| 5 | **Coinbase spot** | Coinbase ticker API | ~5s |
+| 6 | **Candle close** | Last 5m candle close | ~5min |
+
+Each signal records `strike_source` (which source produced the strike) and `quality_status` (`good`/`degraded`/`fallback`) for audit purposes.
 
 ### Indicators
 

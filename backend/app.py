@@ -850,6 +850,12 @@ def api_diagnostics():
     # 5. Resolution agreement (Verge vs Polymarket official)
     resolution_agreement = db.get_resolution_agreement(client)
 
+    # 5b. Resolution audit summary (per strike-method breakdown)
+    resolution_audit = db.get_resolution_audit_summary(client)
+
+    # 5c. Strike source distribution (from recent signals)
+    strike_source_dist = db.get_strike_source_distribution(client)
+
     # 6. TWAP vs single-tick comparison
     last_tick = twap_ticks[-1].price if twap_ticks else None
     twap_val = live["polymarket_rtds_60s_twap_estimate"]
@@ -893,6 +899,8 @@ def api_diagnostics():
         "recent_signals": recent_signals,
         "resolution_accuracy": accuracy,
         "resolution_agreement": resolution_agreement,
+        "resolution_audit": resolution_audit,
+        "strike_source_distribution": strike_source_dist,
         "twap_vs_tick": twap_vs_tick,
         "polymarket_live": polymarket_live,
         "source_comparison": _source_comparison(client, now_ms),

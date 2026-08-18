@@ -1690,6 +1690,19 @@
   }
   .diag-table tr:hover { background: rgba(255,255,255,0.02); }
   .diag-table .source-primary { color: var(--cost-amber); font-weight: 500; }
+  .qgood, .qdeg, .qfb {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-weight: 600;
+    vertical-align: middle;
+    margin-left: 4px;
+  }
+  .qgood { background: rgba(0,200,120,0.15); color: var(--signal-up); }
+  .qdeg { background: rgba(255,184,0,0.15); color: var(--cost-amber); }
+  .qfb { background: rgba(255,80,80,0.12); color: var(--signal-down); }
   .diag-kv {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -3677,7 +3690,8 @@ async function loadDiagnostics() {
     diagDecisionFilter = 'bet';
     const sigRows = diagSignalsData.filter(s => s.final_decision === 'BET HIGHER' || s.final_decision === 'BET LOWER').map(s => {
       const t = s.timestamp ? new Date(s.timestamp).toLocaleString('en-US', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZone:'America/New_York'}) : '—';
-      return `<tr onclick="openSignalModal(${s.id})" style="cursor:pointer"><td>${t}</td><td>${s.market_duration || '1h'}</td><td>${s.final_decision || s.decision}</td><td>${fmtPrice(s.current_price)}</td><td>${sourceTag(s.price_source)}</td><td>${fmtPrice(s.strike_price)}</td></tr>`;
+      const qualBadge = s.quality_status === 'good' ? '<span class="qgood">GOOD</span>' : s.quality_status === 'degraded' ? '<span class="qdeg">DEG</span>' : s.quality_status === 'fallback' ? '<span class="qfb">FB</span>' : '';
+      return `<tr onclick="openSignalModal(${s.id})" style="cursor:pointer"><td>${t}</td><td>${s.market_duration || '1h'}</td><td>${s.final_decision || s.decision}</td><td>${fmtPrice(s.current_price)}</td><td>${sourceTag(s.price_source)}</td><td>${fmtPrice(s.strike_price)} ${qualBadge}</td></tr>`;
     }).join('') || '<tr><td colspan="6" class="diag-empty">No signals yet</td></tr>';
 
     // 4. Resolution Accuracy
@@ -3717,6 +3731,20 @@ async function loadDiagnostics() {
     const pmRows = pmRow('15m', pmLive['15m'], pmLive['15m']?.verge_price) + pmRow('1h', pmLive['1h'], pmLive['1h']?.verge_price);
     const pmHTML = pmRows || '<tr><td colspan="4" class="diag-empty">Could not fetch Polymarket market data</td></tr>';
 
+    // 8. Resolution Audit (per strike-method breakdown)
+    const raAudit = d.resolution_audit || [];
+    const raAuditRows = raAudit.map(r => {
+      const agrColor = r.agreement_pct >= 95 ? 'var(--signal-up)' : r.agreement_pct >= 80 ? 'var(--cost-amber)' : 'var(--signal-down)';
+      return `<tr><td>${r.strike_method}</td><td>${r.total}</td><td style="color:${agrColor}">${r.agreement_pct}%</td><td>${r.avg_tick_count}</td></tr>`;
+    }).join('') || '<tr><td colspan="4" class="diag-empty">No resolution audit data yet</td></tr>';
+
+    // 9. Strike Source Distribution
+    const ssDist = d.strike_source_distribution || [];
+    const ssRows = ssDist.map(r => {
+      const qualClass = r.quality_status === 'good' ? 'ok' : r.quality_status === 'degraded' ? 'warn' : 'warn';
+      return `<tr><td>${r.strike_source}</td><td class="${qualClass}">${r.quality_status}</td><td>${r.duration}</td><td>${r.count}</td></tr>`;
+    }).join('') || '<tr><td colspan="4" class="diag-empty">No strike source data yet — deploy migration 014</td></tr>';
+
     el.innerHTML = `
       <div class="diag-section">
         <div class="diag-section-title">Live Prices</div>
@@ -3749,6 +3777,14 @@ async function loadDiagnostics() {
       <div class="diag-section">
         <div class="diag-section-title">Resolution Agreement (Verge vs Polymarket)</div>
         <table class="diag-table"><thead><tr><th>Duration</th><th>Total</th><th>Agreed</th><th>Disagreed</th><th>Agreement</th></tr></thead><tbody>${raRows}</tbody></table>
+      </div>
+      <div class="diag-section">
+        <div class="diag-section-title">Reference Audit (per strike method)</div>
+        <table class="diag-table"><thead><tr><th>Strike Method</th><th>Windows</th><th>Agreement</th><th>Avg Ticks</th></tr></thead><tbody>${raAuditRows}</tbody></table>
+      </div>
+      <div class="diag-section">
+        <div class="diag-section-title">Strike Source Distribution</div>
+        <table class="diag-table"><thead><tr><th>Source</th><th>Quality</th><th>Duration</th><th>Count</th></tr></thead><tbody>${ssRows}</tbody></table>
       </div>
       <div class="diag-section">
         <div class="diag-section-title">Polymarket Live Market Prices</div>
