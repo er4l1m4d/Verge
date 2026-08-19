@@ -267,14 +267,30 @@ def candles():
 @app.route("/api/spot")
 @require_secret
 def spot():
-    """Ultra-lightweight spot price endpoint for fast polling."""
+    """Ultra-lightweight spot price endpoint for fast polling.
+    Returns the latest RTDS Chainlink tick (same feed Polymarket shows).
+    """
     try:
+        now_ms = int(time.time() * 1000)
+        from polymarket_rtds import get_rtds_ticks
+        ticks = get_rtds_ticks(since_ms=now_ms - 30_000)
+        if ticks:
+            latest = ticks[-1]
+            return jsonify({
+                "spot": round(latest["price"], 2),
+                "source": "rtds_chainlink",
+                "age_ms": now_ms - latest["timestamp_ms"],
+                "now_ms": now_ms,
+            })
+        # Fallback: Chainlink WSS
+        from chainlink_ws import get_chainlink_ws_price
+        wss_price = get_chainlink_ws_price()
+        if wss_price and wss_price > 0:
+            return jsonify({"spot": round(wss_price, 2), "source": "chainlink_ws", "now_ms": now_ms})
+        # Fallback: Coinbase
         from data_fetcher import get_spot_price
         price = get_spot_price()
-        return jsonify({
-            "spot": round(price, 2) if price else None,
-            "now_ms": int(time.time() * 1000),
-        })
+        return jsonify({"spot": round(price, 2) if price else None, "source": "coinbase", "now_ms": now_ms})
     except Exception as e:
         return jsonify({"spot": None, "now_ms": int(time.time() * 1000)})
 
@@ -807,8 +823,12 @@ def api_diagnostics():
     # 2. Live prices from each source
     twap_ticks = db.get_recent_price_snapshots(client, "rtds_chainlink", "BTCUSD",
                                                 since_ms=now_ms - 90_000)
+    from polymarket_rtds import get_rtds_ticks
+    rtds_ticks = get_rtds_ticks(since_ms=now_ms - 30_000)
+    latest_rtds = rtds_ticks[-1]["price"] if rtds_ticks else None
     from chainlink_ws import get_chainlink_ws_price
     live = {
+        "polymarket_rtds_chainlink": latest_rtds,
         "polymarket_rtds_60s_twap_estimate": compute_twap(twap_ticks, now_ms) if len(twap_ticks) >= 2 else None,
         "chainlink_ws": get_chainlink_ws_price(),
         "chainlink_onchain": get_chainlink_price(),

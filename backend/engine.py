@@ -558,49 +558,41 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
         suggested_price = round((1 - odds) * discount, 2)
 
     # Strike + current price (prefer Polymarket's official priceToBeat)
-    # Price source chain: RTDS TWAP → WSS cache → Chainlink HTTP → Pyth → Coinbase spot → candle close
+    # Current price = latest RTDS Chainlink tick (matches Polymarket's live display)
+    # TWAP is kept separate for settlement/reference analysis
     import db as _db
     now_ms_val = int(time.time() * 1000)
 
     # Try RTDS ticks first (in-memory ring buffer, no DB hit)
     from polymarket_rtds import get_rtds_ticks
     raw_ticks = get_rtds_ticks(since_ms=now_ms_val - 90_000)
-    recent_ticks = [_db.PriceSnapshotRow(source="rtds_chainlink", symbol="BTCUSD",
-                                          price=p, timestamp_ms=ts) for p, ts in raw_ticks]
-    twap_price = compute_twap(recent_ticks, window_end_ms=now_ms_val) if len(recent_ticks) >= 2 else None
 
-    # Fallback: WSS cache (in-memory, no DB hit)
-    if twap_price is None:
+    # Current price = latest RTDS tick (matches what Polymarket shows)
+    latest_tick = raw_ticks[-1] if raw_ticks else None
+    if latest_tick:
+        current_price, price_source = latest_tick["price"], "rtds_chainlink"
+        reference_status = "estimated"
+        log.info(f"[{duration}] RTDS latest tick: ${current_price:,.2f} (age: {now_ms_val - latest_tick['timestamp_ms']}ms)")
+    else:
+        reference_status = "fallback"
+        # Fallback: WSS cache (in-memory, no DB hit)
         try:
             from chainlink_ws import get_chainlink_ws_price
             wss_price = get_chainlink_ws_price()
             if wss_price and wss_price > 0:
-                twap_price = wss_price
-        except ImportError:
-            pass
-
-    # 1. TWAP from accumulated Polymarket WS ticks (local estimate, NOT official Polymarket source)
-    if twap_price:
-        current_price, price_source = twap_price, "polymarket_rtds_60s_twap_estimate"
-        reference_status = "estimated"
-        log.info(f"[{duration}] TWAP price: ${twap_price:,.2f} (from {len(recent_ticks)} ticks)")
-    else:
-        reference_status = "fallback"
-        # 2. Chainlink on-chain (direct contract read)
-        from chainlink_fetcher import get_chainlink_price
-        cl_price = get_chainlink_price()
-        if cl_price:
-            current_price, price_source = cl_price, "chainlink_onchain"
-            log.info(f"[{duration}] Chainlink on-chain price: ${cl_price:,.2f}")
-        else:
-            # 3. Pyth oracle (different network, independent cross-check)
-            from pyth_fetcher import get_pyth_btc_price_value
-            pyth_price = get_pyth_btc_price_value()
-            if pyth_price:
-                current_price, price_source = pyth_price, "pyth"
-                log.info(f"[{duration}] Pyth oracle price: ${pyth_price:,.2f}")
+                current_price, price_source = wss_price, "chainlink_ws"
+                log.info(f"[{duration}] Chainlink WSS price: ${wss_price:,.2f}")
             else:
-                # 4. Coinbase spot → candle close fallback
+                raise ValueError("no WSS price")
+        except Exception:
+            # Fallback: Chainlink on-chain (direct contract read)
+            from chainlink_fetcher import get_chainlink_price
+            cl_price = get_chainlink_price()
+            if cl_price:
+                current_price, price_source = cl_price, "chainlink_onchain"
+                log.info(f"[{duration}] Chainlink on-chain price: ${cl_price:,.2f}")
+            else:
+                # Fallback: Coinbase spot
                 spot = get_spot_price()
                 if spot:
                     current_price, price_source = spot, "coinbase_spot"
