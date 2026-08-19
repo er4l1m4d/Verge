@@ -283,21 +283,20 @@ def get_polymarket_live_market(series_slug: str = "btc-up-or-down-15m") -> dict 
 def get_15m_opening_reference(window_start_ms: int) -> tuple[float | None, str]:
     """Recover the opening reference price for a 15m window.
 
-    Tries multiple sources in order:
-      1. Gamma API eventMetadata.priceToBeat (official, if available)
-      2. RTDS 60s TWAP at window start (ring buffer, closest to Polymarket's method)
-      3. On-chain Chainlink 60s TWAP at window start (DB)
-      4. Binance 1m candle open at window start
-      5. Coinbase spot at window start
+    RTDS Chainlink is the primary source — same feed Polymarket resolves against.
+    Falls back to on-chain Chainlink (same asset, different latency).
+    No Binance/Coinbase fallbacks — different exchanges, different prices.
 
-    For sources 2-3, computes a 60s TWAP centered on window_start_ms
-    to match Polymarket's Chainlink TWAP 60s resolution methodology.
+    Tries:
+      1. Gamma API eventMetadata.priceToBeat (official, if available)
+      2. RTDS Chainlink 60s TWAP at window start (ring buffer)
+      3. RTDS Chainlink tick at window start (DB fallback)
+      4. On-chain Chainlink tick at window start (DB fallback)
 
     Returns (price, source_label) or (None, "none").
     """
     import time
     import requests
-    now_ms = int(time.time() * 1000)
 
     # 1. Gamma API eventMetadata.priceToBeat (official Polymarket strike)
     try:
@@ -330,7 +329,7 @@ def get_15m_opening_reference(window_start_ms: int) -> tuple[float | None, str]:
     except Exception:
         pass
 
-    # 2. RTDS 60s TWAP at window start (ring buffer, no DB hit)
+    # 2. RTDS Chainlink 60s TWAP at window start (ring buffer, no DB hit)
     try:
         from polymarket_rtds import get_rtds_ticks
         from engine import compute_twap, PriceSnapshotRow
@@ -345,44 +344,29 @@ def get_15m_opening_reference(window_start_ms: int) -> tuple[float | None, str]:
     except ImportError:
         pass
 
-    # 3. On-chain Chainlink 60s TWAP at window start (DB)
+    # 3. RTDS Chainlink tick at window start (DB fallback — e.g. after restart)
     try:
         import db
-        from engine import compute_twap, PriceSnapshotRow
+        client = db.get_client()
+        ticks = db.get_price_snapshots(
+            client, source="rtds_chainlink", symbol="BTCUSD",
+            since_ms=window_start_ms - 5_000, limit=10,
+        )
+        if ticks:
+            return float(ticks[0]["price"]), "rtds_chainlink_tick"
+    except Exception:
+        pass
+
+    # 4. On-chain Chainlink tick at window start (DB fallback)
+    try:
+        import db
         client = db.get_client()
         ticks = db.get_price_snapshots(
             client, source="chainlink_onchain", symbol="BTC",
-            since_ms=window_start_ms - 65_000, limit=100,
+            since_ms=window_start_ms - 5_000, limit=10,
         )
         if ticks:
-            rows = [PriceSnapshotRow(source="chainlink_onchain", symbol="BTC",
-                                     price=float(t["price"]), timestamp_ms=t["timestamp_ms"])
-                    for t in ticks]
-            twap = compute_twap(rows, window_end_ms=window_start_ms, window_seconds=60)
-            if twap:
-                return twap, "chainlink_onchain_twap_60s"
-    except Exception:
-        pass
-
-    # 4. Binance 1m candle open at window start
-    try:
-        from data_fetcher import get_binance_klines
-        df = get_binance_klines(
-            symbol="BTCUSDT", interval="1m",
-            start_time=window_start_ms, end_time=window_start_ms + 60_000,
-            limit=2,
-        )
-        if df is not None and len(df) > 0:
-            return float(df.iloc[0]["open"]), "binance_1m_candle_open"
-    except Exception:
-        pass
-
-    # 5. Coinbase spot at window start
-    try:
-        from data_fetcher import get_price_at_time
-        price = get_price_at_time(window_start_ms)
-        if price:
-            return price, "coinbase_spot"
+            return float(ticks[0]["price"]), "chainlink_onchain_tick"
     except Exception:
         pass
 

@@ -638,7 +638,7 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
                 log.info(f"[{duration}] Strike from text parsing: ${strike_price:,.2f}")
 
     if strike_price is None:
-        if hour_open_time is not None and len(df_price) > 0:
+        if duration != "15m" and hour_open_time is not None and len(df_price) > 0:
             # 1h fallback: compute from first candle in window
             matching = df_price[df_price["open_time"] >= hour_open_time]
             if len(matching) > 0:
@@ -653,8 +653,8 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
         log.warning(f"[{duration}] No strike price available from any source")
 
     # Derive quality_status from strike_source trust tier
-    _GOOD_SOURCES = {"gamma_price_to_beat", "rtds_twap_60s"}
-    _DEGRADED_SOURCES = {"chainlink_onchain_twap_60s", "gamma_recursive_search", "gamma_text_parse"}
+    _GOOD_SOURCES = {"gamma_price_to_beat", "rtds_chainlink_twap_60s", "rtds_chainlink_tick"}
+    _DEGRADED_SOURCES = {"chainlink_onchain_twap_60s", "chainlink_onchain_tick", "gamma_recursive_search", "gamma_text_parse"}
     _FALLBACK_SOURCES = {"binance_candle", "coinbase_spot", "candle_close"}
     if strike_source in _GOOD_SOURCES:
         quality_status = "good"

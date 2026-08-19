@@ -204,23 +204,15 @@ def candles():
                     "close": round(float(row["close"]), 2),
                 })
 
-            # 15m strike: prefer official, then 60s TWAP at window start, then bar open
+            # 15m strike: prefer official, then RTDS Chainlink TWAP at window start
             if official_strike:
                 strike = round(official_strike, 2)
             elif market and market.get("window_open"):
                 from polymarket_fetcher import get_15m_opening_reference
                 strike_val, _ = get_15m_opening_reference(market["window_open"])
-                if strike_val is None and len(df_recent) > 0:
-                    import time as _t
-                    matching = df_recent[df_recent["open_time"] >= market["window_open"]]
-                    if len(matching) > 0:
-                        strike_val = float(matching.iloc[0]["open"])
-                if strike_val is None:
-                    from data_fetcher import get_price_at_time
-                    strike_val = get_price_at_time(market["window_open"])
-                strike = round(strike_val, 2) if strike_val else round(float(df_recent.iloc[0]["open"]), 2)
+                strike = round(strike_val, 2) if strike_val else None
             else:
-                strike = round(float(df_recent.iloc[0]["open"]), 2)
+                strike = None
             spot = get_spot_price()
 
             return jsonify({
