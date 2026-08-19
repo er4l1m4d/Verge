@@ -369,7 +369,7 @@
   .chart-container {
     flex: 1;
     position: relative;
-    height: 100px;
+    height: 160px;
     background: rgba(255,255,255,0.02);
     border-radius: 4px;
     overflow: hidden;
@@ -2303,168 +2303,218 @@ function drawChart(candles, strike, spot, nowMs) {
 
   const W = rect.width;
   const H = rect.height;
-  const pad = { top: 12, right: 8, bottom: 20, left: 2 };
+  const pad = { top: 14, right: 52, bottom: 18, left: 4 };
   const chartW = W - pad.left - pad.right;
   const chartH = H - pad.top - pad.bottom;
 
   ctx.clearRect(0, 0, W, H);
 
-  // Extend the last candle with spot price as a live partial candle
+  // Build draw list: real candles + live spot extension
   let drawCandles = [...candles];
   if (spot && candles.length > 0) {
-    const lastCandle = candles[candles.length - 1];
-    const lastTime = lastCandle.time;
-    // How far into the current 5m bucket are we (as fraction 0..1)?
-    const candleDuration = 5 * 60 * 1000;
-    const elapsed = nowMs - lastTime;
-    const fraction = Math.min(Math.max(elapsed / candleDuration, 0), 1);
-    // Interpolate between last candle open and spot as a visual bridge
-    // But simpler: just add spot as an extra point at the current time
+    const last = candles[candles.length - 1];
     drawCandles.push({
-      time: nowMs,
-      open: lastCandle.close,
-      high: Math.max(lastCandle.close, spot),
-      low: Math.min(lastCandle.close, spot),
-      close: spot,
+      time: nowMs, open: last.close, high: Math.max(last.close, spot),
+      low: Math.min(last.close, spot), close: spot,
     });
   }
 
-  const closes = drawCandles.map(c => c.close);
-  const allPrices = strike ? [...closes, strike] : closes;
+  // Price range
+  const highs = drawCandles.map(c => c.high);
+  const lows = drawCandles.map(c => c.low);
+  const allPrices = strike ? [...highs, ...lows, strike] : [...highs, ...lows];
   const minP = Math.min(...allPrices);
   const maxP = Math.max(...allPrices);
   const range = maxP - minP || 1;
-  const yPad = range * 0.1;
+  const yPad = range * 0.12;
   const yMin = minP - yPad;
   const yMax = maxP + yPad;
   const yRange = yMax - yMin;
 
-  // Use the original candle count for spacing so the live point slides in
-  const xStep = chartW / (candles.length || 1);
+  const candleCount = candles.length;
+  const xStep = chartW / (candleCount || 1);
+  const candleW = Math.max(Math.min(xStep * 0.65, 14), 2);
 
-  function toX(i) { return pad.left + i * xStep; }
+  function toX(i) { return pad.left + i * xStep + xStep / 2; }
   function toY(p) { return pad.top + chartH - ((p - yMin) / yRange) * chartH; }
 
-  // Strike line (dashed)
+  // --- Signal zone shading (green above strike, red below) ---
   if (strike) {
     const sy = toY(strike);
-    ctx.strokeStyle = 'rgba(214,165,68,0.5)';
+    // Green zone (above strike = UP)
+    const gGrad = ctx.createLinearGradient(0, pad.top, 0, sy);
+    gGrad.addColorStop(0, 'rgba(51,193,126,0.07)');
+    gGrad.addColorStop(1, 'rgba(51,193,126,0.01)');
+    ctx.fillStyle = gGrad;
+    ctx.fillRect(pad.left, pad.top, chartW, sy - pad.top);
+    // Red zone (below strike = DOWN)
+    const rGrad = ctx.createLinearGradient(0, sy, 0, pad.top + chartH);
+    rGrad.addColorStop(0, 'rgba(226,76,76,0.01)');
+    rGrad.addColorStop(1, 'rgba(226,76,76,0.07)');
+    ctx.fillStyle = rGrad;
+    ctx.fillRect(pad.left, sy, chartW, pad.top + chartH - sy);
+  }
+
+  // --- Subtle grid lines ---
+  const gridSteps = 4;
+  ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i <= gridSteps; i++) {
+    const gy = pad.top + (chartH / gridSteps) * i;
+    ctx.beginPath();
+    ctx.moveTo(pad.left, gy);
+    ctx.lineTo(pad.left + chartW, gy);
+    ctx.stroke();
+  }
+
+  // --- Candlesticks ---
+  drawCandles.forEach((c, i) => {
+    const x = toX(i);
+    const isLive = i === drawCandles.length - 1 && drawCandles.length > candles.length;
+    const isUp = c.close >= c.open;
+    const bodyTop = toY(Math.max(c.open, c.close));
+    const bodyBot = toY(Math.min(c.open, c.close));
+    const bodyH = Math.max(bodyBot - bodyTop, 1);
+
+    // Color
+    let color, wickColor;
+    if (isLive) {
+      color = spot >= (candles[candles.length - 1]?.close || spot) ? '#33C17E' : '#E24C4C';
+      wickColor = color;
+    } else {
+      color = isUp ? '#33C17E' : '#E24C4C';
+      wickColor = isUp ? 'rgba(51,193,126,0.6)' : 'rgba(226,76,76,0.6)';
+    }
+
+    // Wick
+    ctx.strokeStyle = wickColor;
     ctx.lineWidth = 1;
-    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.moveTo(x, toY(c.high));
+    ctx.lineTo(x, bodyTop);
+    ctx.moveTo(x, bodyBot);
+    ctx.lineTo(x, toY(c.low));
+    ctx.stroke();
+
+    // Body
+    ctx.fillStyle = isUp ? 'rgba(51,193,126,0.85)' : 'rgba(226,76,76,0.85)';
+    if (isLive) {
+      ctx.fillStyle = isUp ? 'rgba(51,193,126,0.5)' : 'rgba(226,76,76,0.5)';
+    }
+    const bx = x - candleW / 2;
+    if (candleW > 3) {
+      ctx.fillRect(bx, bodyTop, candleW, bodyH);
+    } else {
+      // Thin candle: just draw the body line
+      ctx.strokeStyle = color;
+      ctx.lineWidth = Math.max(candleW, 1.5);
+      ctx.beginPath();
+      ctx.moveTo(x, bodyTop);
+      ctx.lineTo(x, bodyBot);
+      ctx.stroke();
+    }
+  });
+
+  // --- Strike line ---
+  if (strike) {
+    const sy = toY(strike);
+    ctx.strokeStyle = 'rgba(214,165,68,0.6)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([5, 3]);
     ctx.beginPath();
     ctx.moveTo(pad.left, sy);
-    ctx.lineTo(W - pad.right, sy);
+    ctx.lineTo(pad.left + chartW, sy);
     ctx.stroke();
     ctx.setLineDash([]);
 
-    ctx.fillStyle = 'rgba(214,165,68,0.7)';
+    // Strike label (right side)
+    ctx.fillStyle = 'rgba(214,165,68,0.9)';
     ctx.font = '9px "Geist Mono", monospace';
     ctx.textAlign = 'left';
-    ctx.fillText('Target', W - pad.right - 30, sy - 4);
+    const strikeText = `$${Math.round(strike).toLocaleString()}`;
+    const stW = ctx.measureText(strikeText).width;
+    const stX = pad.left + chartW + 4;
+    // Background pill
+    ctx.fillStyle = 'rgba(214,165,68,0.12)';
+    ctx.fillRect(stX - 2, sy - 7, stW + 6, 14);
+    ctx.fillStyle = 'rgba(214,165,68,0.9)';
+    ctx.fillText(strikeText, stX + 1, sy + 3);
   }
 
-  // Price line — draw up to last real candle in white, then spot extension in green/red
-  // Solid white line for closed candles
-  ctx.strokeStyle = '#E7E9EC';
-  ctx.lineWidth = 1.5;
-  ctx.lineJoin = 'round';
-  ctx.beginPath();
-  candles.forEach((c, i) => {
-    const x = toX(i);
-    const y = toY(c.close);
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  });
-  // Extend to spot price
-  if (spot && drawCandles.length > candles.length) {
+  // --- Current price marker ---
+  if (spot) {
+    const lastCandle = candles[candles.length - 1];
     const lastX = toX(candles.length - 1);
     const spotY = toY(spot);
-    // Interpolate x position based on how far into the 5m candle we are
-    const lastTime = candles[candles.length - 1].time;
-    const candleDuration = 5 * 60 * 1000;
-    const elapsed = nowMs - lastTime;
+    const candleDuration = (candles.length > 1)
+      ? (candles[1].time - candles[0].time) : 5 * 60 * 1000;
+    const elapsed = nowMs - lastCandle.time;
     const fraction = Math.min(elapsed / candleDuration, 1);
-    const extX = lastX + xStep * fraction;
-    // Clamp to chart edge
-    const clampedX = Math.min(extX, W - pad.right);
-    ctx.lineTo(clampedX, spotY);
-  }
-  ctx.stroke();
+    const spotX = Math.min(lastX + xStep * fraction, pad.left + chartW);
 
-  // Gradient fill below line
-  const grad = ctx.createLinearGradient(0, pad.top, 0, pad.top + chartH);
-  grad.addColorStop(0, 'rgba(231,233,236,0.08)');
-  grad.addColorStop(1, 'rgba(231,233,236,0)');
-  ctx.fillStyle = grad;
-  ctx.beginPath();
-  candles.forEach((c, i) => {
-    const x = toX(i);
-    const y = toY(c.close);
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  });
-  if (spot && drawCandles.length > candles.length) {
-    const lastX = toX(candles.length - 1);
-    const spotY = toY(spot);
-    const lastTime = candles[candles.length - 1].time;
-    const candleDuration = 5 * 60 * 1000;
-    const elapsed = nowMs - lastTime;
-    const fraction = Math.min(elapsed / candleDuration, 1);
-    const extX = Math.min(lastX + xStep * fraction, W - pad.right);
-    ctx.lineTo(extX, spotY);
-  }
-  const fillEndX = spot && drawCandles.length > candles.length
-    ? Math.min(toX(candles.length - 1) + xStep * Math.min((nowMs - candles[candles.length - 1].time) / (5 * 60 * 1000), 1), W - pad.right)
-    : toX(candles.length - 1);
-  ctx.lineTo(fillEndX, pad.top + chartH);
-  ctx.lineTo(toX(0), pad.top + chartH);
-  ctx.closePath();
-  ctx.fill();
-
-  // Pulsing dot at current spot price
-  if (spot && drawCandles.length > candles.length) {
-    const lastX = toX(candles.length - 1);
-    const spotY = toY(spot);
-    const lastTime = candles[candles.length - 1].time;
-    const candleDuration = 5 * 60 * 1000;
-    const elapsed = nowMs - lastTime;
-    const fraction = Math.min(elapsed / candleDuration, 1);
-    const clampedX = Math.min(lastX + xStep * fraction, W - pad.right);
-
-    const isUp = spot >= (candles[candles.length - 1]?.close || spot);
+    const isUp = spot >= lastCandle.close;
     const dotColor = isUp ? '#33C17E' : '#E24C4C';
+
+    // Horizontal guide line from spot to right edge
+    ctx.strokeStyle = isUp ? 'rgba(51,193,126,0.2)' : 'rgba(226,76,76,0.2)';
+    ctx.lineWidth = 0.5;
+    ctx.setLineDash([2, 2]);
+    ctx.beginPath();
+    ctx.moveTo(spotX, spotY);
+    ctx.lineTo(pad.left + chartW, spotY);
+    ctx.stroke();
+    ctx.setLineDash([]);
 
     // Glow
     ctx.beginPath();
-    ctx.arc(clampedX, spotY, 6, 0, Math.PI * 2);
-    ctx.fillStyle = isUp ? 'rgba(51,193,126,0.2)' : 'rgba(226,76,76,0.2)';
+    ctx.arc(spotX, spotY, 6, 0, Math.PI * 2);
+    ctx.fillStyle = isUp ? 'rgba(51,193,126,0.15)' : 'rgba(226,76,76,0.15)';
     ctx.fill();
 
     // Solid dot
     ctx.beginPath();
-    ctx.arc(clampedX, spotY, 3, 0, Math.PI * 2);
+    ctx.arc(spotX, spotY, 3, 0, Math.PI * 2);
     ctx.fillStyle = dotColor;
     ctx.fill();
+
+    // Price label (right side)
+    const priceText = `$${Math.round(spot).toLocaleString()}`;
+    const ptW = ctx.measureText(priceText).width;
+    const ptX = pad.left + chartW + 4;
+    ctx.fillStyle = isUp ? 'rgba(51,193,126,0.12)' : 'rgba(226,76,76,0.12)';
+    ctx.fillRect(ptX - 2, spotY - 7, ptW + 6, 14);
+    ctx.fillStyle = dotColor;
+    ctx.font = '9px "Geist Mono", monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(priceText, ptX + 1, spotY + 3);
   }
 
-  // X-axis labels (first, middle, last)
-  ctx.fillStyle = 'rgba(107,114,128,0.6)';
-  ctx.font = '9px "Geist Mono", monospace';
-  ctx.textAlign = 'center';
-  const firstTime = new Date(candles[0].time);
-  const lastTime = new Date(candles[candles.length - 1].time);
-  const midTime = new Date(candles[Math.floor(candles.length / 2)].time);
-  const fmt = (d) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: false, timeZone: 'America/New_York' });
-  ctx.fillText(fmt(firstTime), toX(0), H - 4);
-  ctx.fillText(fmt(midTime), toX(Math.floor(candles.length / 2)), H - 4);
-  ctx.fillText(fmt(lastTime), toX(candles.length - 1), H - 4);
-
-  // Y-axis: only max and min price
+  // --- X-axis labels ---
   ctx.fillStyle = 'rgba(107,114,128,0.5)';
   ctx.font = '9px "Geist Mono", monospace';
-  ctx.textAlign = 'right';
-  ctx.fillText(`$${maxP.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0})}`, W - 2, pad.top + 4);
-  ctx.fillText(`$${minP.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0})}`, W - 2, pad.top + chartH);
+  ctx.textAlign = 'center';
+  const fmt = (d) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: false, timeZone: 'America/New_York' });
+  if (candles.length >= 3) {
+    const first = new Date(candles[0].time);
+    const mid = new Date(candles[Math.floor(candles.length / 2)].time);
+    const last = new Date(candles[candles.length - 1].time);
+    ctx.fillText(fmt(first), toX(0), H - 4);
+    ctx.fillText(fmt(mid), toX(Math.floor(candles.length / 2)), H - 4);
+    ctx.fillText(fmt(last), toX(candles.length - 1), H - 4);
+  } else if (candles.length > 0) {
+    const first = new Date(candles[0].time);
+    ctx.fillText(fmt(first), toX(0), H - 4);
+  }
+
+  // --- Y-axis price labels ---
+  ctx.fillStyle = 'rgba(107,114,128,0.4)';
+  ctx.font = '9px "Geist Mono", monospace';
+  ctx.textAlign = 'left';
+  for (let i = 0; i <= gridSteps; i++) {
+    const gy = pad.top + (chartH / gridSteps) * i;
+    const priceVal = yMax - (yRange / gridSteps) * i;
+    ctx.fillText(`$${Math.round(priceVal).toLocaleString()}`, pad.left + chartW + 4, gy + 3);
+  }
 }
 
 function renderDashboard(signal, stats, performance) {
