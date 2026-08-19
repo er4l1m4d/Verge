@@ -2332,28 +2332,14 @@ function drawChart(candles, strike, spot, nowMs) {
   const yRange = yMax - yMin;
 
   const candleCount = candles.length;
-  const xStep = chartW / (candleCount || 1);
-  const candleW = Math.max(Math.min(xStep * 0.65, 14), 2);
+  const candleGap = 2;
+  const xStep = Math.min(chartW / (candleCount || 1), 14);
+  const candleW = Math.max(xStep - candleGap, 2);
+  const usedW = xStep * candleCount;
+  const offsetX = (chartW - usedW) / 2;
 
-  function toX(i) { return pad.left + i * xStep + xStep / 2; }
+  function toX(i) { return pad.left + offsetX + i * xStep + xStep / 2; }
   function toY(p) { return pad.top + chartH - ((p - yMin) / yRange) * chartH; }
-
-  // --- Signal zone shading (green above strike, red below) ---
-  if (strike) {
-    const sy = toY(strike);
-    // Green zone (above strike = UP)
-    const gGrad = ctx.createLinearGradient(0, pad.top, 0, sy);
-    gGrad.addColorStop(0, 'rgba(51,193,126,0.07)');
-    gGrad.addColorStop(1, 'rgba(51,193,126,0.01)');
-    ctx.fillStyle = gGrad;
-    ctx.fillRect(pad.left, pad.top, chartW, sy - pad.top);
-    // Red zone (below strike = DOWN)
-    const rGrad = ctx.createLinearGradient(0, sy, 0, pad.top + chartH);
-    rGrad.addColorStop(0, 'rgba(226,76,76,0.01)');
-    rGrad.addColorStop(1, 'rgba(226,76,76,0.07)');
-    ctx.fillStyle = rGrad;
-    ctx.fillRect(pad.left, sy, chartW, pad.top + chartH - sy);
-  }
 
   // --- Subtle grid lines ---
   const gridSteps = 4;
