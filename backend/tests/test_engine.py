@@ -194,6 +194,116 @@ class TestFlaskAPI:
         assert mock_resolve.call_count >= 1
 
 
+    @patch("data_fetcher.get_binance_klines", side_effect=_mock_binance_klines)
+    @patch("engine.requests.get", side_effect=_mock_clob_responses())
+    def test_signal_endpoint_has_reference_fields(self, mock_get, mock_klines):
+        client = app.test_client()
+        resp = client.get("/api/signal")
+        data = resp.get_json()
+        assert "strike_price" in data
+        assert "strike_source" in data
+        assert "current_reference" in data
+        assert "current_reference_source" in data
+        assert "reference_quality" in data
+        assert "fallback_used" in data
+        assert "reference_age_seconds" in data
+        assert "difference" in data
+        assert "difference_percent" in data
+
+    @patch("data_fetcher.get_binance_klines", side_effect=_mock_binance_klines)
+    @patch("engine.requests.get", side_effect=_mock_clob_responses())
+    def test_signal_endpoint_reference_values_are_consistent(self, mock_get, mock_klines):
+        client = app.test_client()
+        resp = client.get("/api/signal")
+        data = resp.get_json()
+        if data["strike_price"] and data["current_reference"]:
+            assert data["difference"] is not None
+            assert data["difference_percent"] is not None
+            expected_diff = round(data["current_reference"] - data["strike_price"], 2)
+            assert data["difference"] == expected_diff
+
+    @patch("data_fetcher.get_binance_klines", side_effect=_mock_binance_klines)
+    @patch("engine.requests.get", side_effect=_mock_clob_responses())
+    def test_signal_endpoint_15m_duration(self, mock_get, mock_klines):
+        client = app.test_client()
+        resp = client.get("/api/signal?duration=15m")
+        data = resp.get_json()
+        assert "decision" in data
+        assert "duration" in data
+        assert data["duration"] == "15m"
+
+    @patch("db.get_client")
+    @patch("db.get_resolution_audit_rows", return_value=[])
+    @patch("db.get_resolution_audit_statistics", return_value={
+        "total_markets": 0,
+        "agreement_count": 0,
+        "disagreement_count": 0,
+        "agreement_pct": 0,
+        "strike_method_breakdown": [],
+        "outcome_distribution": {},
+        "strike_price_stats": None,
+        "twap_vs_strike_stats": None,
+    })
+    def test_resolution_audit_endpoint_empty(self, mock_stats, mock_rows, mock_client):
+        client = app.test_client()
+        resp = client.get("/api/diagnostics/resolution-audit")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "rows" in data
+        assert "statistics" in data
+        assert data["rows"] == []
+        assert data["statistics"]["total_markets"] == 0
+
+    @patch("db.get_client")
+    @patch("db.get_resolution_audit_rows")
+    @patch("db.get_resolution_audit_statistics")
+    def test_resolution_audit_endpoint_with_data(self, mock_stats, mock_rows, mock_client):
+        mock_rows.return_value = [
+            {
+                "id": 1, "window_start": 1000, "window_close": 2000,
+                "duration": "15m", "local_outcome": "UP", "official_outcome": "UP",
+                "agreement": True, "strike_method": "rtds_chainlink_tick",
+                "strike_price": 100000.0, "twap_price": 100050.0,
+                "open_price": 100000.0, "tick_count": 60,
+                "strike_source": "polymarket_price_to_beat",
+                "quality_status": "GOOD", "market_id": "m1",
+                "condition_id": "c1", "signal_strike_price": 100000.0,
+                "signal_current_price": 100050.0, "reference_status": "estimated",
+                "price_source": "rtds_chainlink",
+            }
+        ]
+        mock_stats.return_value = {
+            "total_markets": 1,
+            "agreement_count": 1,
+            "disagreement_count": 0,
+            "agreement_pct": 100.0,
+            "strike_method_breakdown": [],
+            "outcome_distribution": {"UP": 1},
+            "strike_price_stats": {"count": 1, "min": 100000.0, "max": 100000.0, "mean": 100000.0},
+            "twap_vs_strike_stats": None,
+        }
+        client = app.test_client()
+        resp = client.get("/api/diagnostics/resolution-audit?duration=15m&stats=true")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert len(data["rows"]) == 1
+        assert data["rows"][0]["agreement"] is True
+        assert data["statistics"]["total_markets"] == 1
+        assert data["statistics"]["agreement_pct"] == 100.0
+
+    @patch("db.get_client")
+    @patch("db.get_resolution_audit_rows")
+    @patch("db.get_resolution_audit_statistics")
+    def test_resolution_audit_endpoint_15m_filter(self, mock_stats, mock_rows, mock_client):
+        mock_rows.return_value = []
+        mock_stats.return_value = {"total_markets": 0}
+        client = app.test_client()
+        resp = client.get("/api/diagnostics/resolution-audit?duration=15m")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["duration_filter"] == "15m"
+
+
 class TestResolutionConfig:
     """Verify resolve_previous_hour uses correct config keys (unmocked)."""
 

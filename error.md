@@ -42,3 +42,17 @@ Unified all three paths to use `get_15m_opening_reference()` (60s TWAP at window
 - Any new strike computation must go through `get_15m_opening_reference()`, not a separate path
 - `strike_source` on every signal provides provenance trail
 - `quality_status` trust tiers prevent proxy fallbacks from being labeled as trusted
+
+## Error
+Date: 2026-08-19
+Step: 15m price-reference audit baseline validation
+File(s): backend/tests/test_engine.py, backend/app.py
+
+### Cause
+The local Python environment does not have Flask installed, so pytest cannot import `backend/app.py` during collection.
+
+### Fix
+Recorded the environment blocker and continued with implementation plus targeted tests that avoid importing Flask until dependencies are installed.
+
+### Prevention
+Install `backend/requirements.txt` before full-suite validation, or keep non-Flask reference-pipeline tests importable without app dependencies.

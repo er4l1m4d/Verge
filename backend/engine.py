@@ -190,7 +190,12 @@ def get_current_market(duration: str = "1h") -> dict | None:
             # Extract priceToBeat from event metadata (Polymarket's official strike)
             metadata = event.get("eventMetadata") or {}
             price_to_beat = metadata.get("priceToBeat")
-            has_ptb = price_to_beat is not None and str(price_to_beat).strip() != ""
+            has_ptb = False
+            if price_to_beat is not None and str(price_to_beat).strip() != "":
+                try:
+                    has_ptb = float(price_to_beat) > 0
+                except (TypeError, ValueError):
+                    has_ptb = False
 
             # Prefer events with priceToBeat; among same tier, pick latest start
             if best is None or (has_ptb and not best_has_price_to_beat) or \
@@ -222,6 +227,7 @@ def get_current_market(duration: str = "1h") -> dict | None:
                     "window_end": end_ms,
                     "duration": duration,
                     "price_to_beat": price_to_beat,
+                    "price_to_beat_source": "polymarket_price_to_beat" if has_ptb else None,
                     "up_odds": up_odds,
                     "condition_id": cid,
                     "market_id": str(mid) if mid else None,
@@ -561,17 +567,35 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
     # Current price = latest RTDS Chainlink tick (matches Polymarket's live display)
     # TWAP is kept separate for settlement/reference analysis
     import db as _db
+    from price_reference import (
+        QUALITY_DEGRADED,
+        QUALITY_FALLBACK,
+        QUALITY_GOOD,
+        QUALITY_HIGH,
+        QUALITY_INVALID,
+        assess_observation_health,
+        classify_reference_source,
+        classify_strike_source,
+    )
     now_ms_val = int(time.time() * 1000)
+    current_price = None
+    price_source = None
+    reference_age_ms = None
+    reference_status = "estimated"
+    reference_health = None
 
     # Try RTDS ticks first (in-memory ring buffer, no DB hit)
     from polymarket_rtds import get_rtds_ticks
     raw_ticks = get_rtds_ticks(since_ms=now_ms_val - 90_000)
+    if duration == "15m":
+        reference_health = assess_observation_health(raw_ticks, now_ms=now_ms_val)
 
     # Current price = latest RTDS tick (matches what Polymarket shows)
     latest_tick = raw_ticks[-1] if raw_ticks else None
     if latest_tick:
         current_price, price_source = latest_tick["price"], "rtds_chainlink"
         reference_status = "estimated"
+        reference_age_ms = now_ms_val - latest_tick["timestamp_ms"]
         log.info(f"[{duration}] RTDS latest tick: ${current_price:,.2f} (age: {now_ms_val - latest_tick['timestamp_ms']}ms)")
     else:
         reference_status = "fallback"
@@ -607,8 +631,15 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
     strike_price = market.get("price_to_beat")
     strike_source = None
     if strike_price is not None:
-        strike_source = "gamma_price_to_beat"
-        log.info(f"[{duration}] Using official Polymarket strike: ${strike_price:,.2f}")
+        try:
+            strike_price = float(strike_price)
+        except (TypeError, ValueError):
+            strike_price = None
+        if strike_price is not None and strike_price > 0:
+            strike_source = "polymarket_price_to_beat"
+            log.info(f"[{duration}] Using Polymarket priceToBeat strike: ${strike_price:,.2f}")
+        else:
+            strike_source = None
     elif duration == "15m":
         # 15m: Use multi-source opening reference recovery
         from polymarket_fetcher import get_15m_opening_reference
@@ -644,24 +675,21 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
     if strike_price is None:
         log.warning(f"[{duration}] No strike price available from any source")
 
-    # Derive quality_status from strike_source trust tier
-    _GOOD_SOURCES = {"gamma_price_to_beat", "rtds_chainlink_twap_60s", "rtds_chainlink_tick"}
-    _DEGRADED_SOURCES = {"chainlink_onchain_twap_60s", "chainlink_onchain_tick", "gamma_recursive_search", "gamma_text_parse"}
-    _FALLBACK_SOURCES = {"binance_candle", "coinbase_spot", "candle_close"}
-    if strike_source in _GOOD_SOURCES:
-        quality_status = "good"
-    elif strike_source in _DEGRADED_SOURCES:
-        quality_status = "degraded"
-    elif strike_source in _FALLBACK_SOURCES:
-        quality_status = "fallback"
-    else:
-        quality_status = "estimated"
+    strike_quality = classify_strike_source(strike_source, strike_price)
+    reference_quality = classify_reference_source(price_source, current_price, reference_health)
+    quality_order = {
+        QUALITY_INVALID: 0,
+        QUALITY_FALLBACK: 1,
+        QUALITY_DEGRADED: 2,
+        QUALITY_GOOD: 3,
+        QUALITY_HIGH: 4,
+    }
+    quality_status = min((strike_quality, reference_quality), key=lambda q: quality_order.get(q, 0))
 
-    # Compute reference_age_ms: age of the current price reference at signal time
-    reference_age_ms = None
-    if price_source and current_price:
+    # Compute reference_age_ms from persisted fallback snapshots when the live
+    # RTDS buffer did not already provide an event timestamp.
+    if reference_age_ms is None and price_source and current_price:
         now_ms = int(time.time() * 1000)
-        # Use the latest price snapshot's timestamp as reference point
         try:
             import db as _db
             _client = _db.get_client()
@@ -673,6 +701,26 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
                 reference_age_ms = now_ms - _snaps[-1]["timestamp_ms"]
         except Exception:
             pass
+
+    if duration == "15m" and (strike_quality == QUALITY_INVALID or reference_quality == QUALITY_INVALID):
+        reasons = []
+        if strike_quality == QUALITY_INVALID:
+            reasons.append("invalid_strike")
+        if reference_quality == QUALITY_INVALID:
+            reasons.append("invalid_reference")
+        if reference_health and reference_health.reasons:
+            reasons.extend(reference_health.reasons)
+        sig.decision = "SKIP"
+        edge.final_decision = "SKIP"
+        sig.confidence = "none"
+        note_suffix = ", ".join(dict.fromkeys(reasons))
+        note = f"SKIP: 15m reference audit blocked signal ({note_suffix})"
+    elif duration == "15m" and reference_quality == QUALITY_DEGRADED:
+        note = "15m reference quality DEGRADED; signal retained with reduced trust"
+        if sig.confidence == "High":
+            sig.confidence = "Low"
+    else:
+        note = None
 
     return LiveSignal(
         decision=sig.decision,
@@ -705,6 +753,7 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
         strike_source=strike_source,
         reference_age_ms=reference_age_ms,
         quality_status=quality_status,
+        note=note,
     )
 
 

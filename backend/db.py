@@ -1102,7 +1102,11 @@ def get_recent_signals_with_source(client: Client, limit: int = 20) -> list[dict
     """Get recent signals with their price source for diagnostics display."""
     resp = (
         client.table("signals")
-        .select("id,timestamp,decision,final_decision,current_price,price_source,strike_price,market_duration")
+        .select(
+            "id,timestamp,decision,final_decision,current_price,price_source,"
+            "reference_status,reference_age_ms,strike_price,strike_source,"
+            "quality_status,market_duration"
+        )
         .order("id", desc=True)
         .limit(limit)
         .execute()
@@ -1259,3 +1263,187 @@ def get_strike_source_distribution(client: Client) -> list[dict]:
             }
         by_source[key]["count"] += 1
     return sorted(by_source.values(), key=lambda x: -x["count"])
+
+
+def get_resolution_audit_rows(
+    client: Client,
+    duration: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+    order: str = "desc",
+) -> list[dict]:
+    """Fetch individual resolution_audit rows joined with signal metadata.
+
+    Returns rows with: window_start, window_close, duration, local_outcome,
+    official_outcome, agreement, strike_method, strike_price, twap_price,
+    open_price, tick_count, strike_source, quality_status, market_id,
+    condition_id, signal_strike_price, signal_current_price.
+    """
+    query = (
+        client.table("resolution_audit")
+        .select(
+            "id, window_start, window_close, duration, local_outcome, "
+            "official_outcome, agreement, strike_method, strike_price, "
+            "twap_price, open_price, tick_count, created_at"
+        )
+    )
+    if duration:
+        query = query.eq("duration", duration)
+    query = query.order("window_start", desc=(order == "desc"))
+    query = query.range(offset, offset + limit - 1)
+    resp = query.execute()
+    rows = resp.data or []
+
+    if not rows:
+        return []
+
+    # Enrich with signal metadata (strike_source, quality_status, market_id)
+    window_starts = [r["window_start"] for r in rows]
+    durations_seen = set(r["duration"] for r in rows)
+
+    signals_map: dict[tuple[int, str], dict] = {}
+    for dur in durations_seen:
+        sig_resp = (
+            client.table("signals")
+            .select(
+                "market_window_start, market_duration, strike_source, "
+                "quality_status, market_id, condition_id, strike_price, "
+                "current_price, reference_status, price_source"
+            )
+            .eq("market_duration", dur)
+            .in_("market_window_start", window_starts)
+            .execute()
+        )
+        for s in (sig_resp.data or []):
+            key = (s["market_window_start"], s["market_duration"])
+            signals_map[key] = s
+
+    enriched = []
+    for row in rows:
+        sig = signals_map.get((row["window_start"], row["duration"]), {})
+        enriched.append({
+            **row,
+            "strike_source": sig.get("strike_source"),
+            "quality_status": sig.get("quality_status"),
+            "market_id": sig.get("market_id"),
+            "condition_id": sig.get("condition_id"),
+            "signal_strike_price": sig.get("strike_price"),
+            "signal_current_price": sig.get("current_price"),
+            "reference_status": sig.get("reference_status"),
+            "price_source": sig.get("price_source"),
+        })
+    return enriched
+
+
+def get_resolution_audit_statistics(client: Client, duration: str | None = None) -> dict:
+    """Compute aggregate statistics over resolution_audit for validation.
+
+    Returns:
+        total_markets, agreement_count, disagreement_count, agreement_pct,
+        strike_method_breakdown, outcome_distribution,
+        strike_price_stats (if available), twap_vs_strike stats.
+    """
+    rows = get_resolution_audit_rows(client, duration=duration, limit=10000)
+    if not rows:
+        return {
+            "total_markets": 0,
+            "agreement_count": 0,
+            "disagreement_count": 0,
+            "agreement_pct": 0,
+            "strike_method_breakdown": [],
+            "outcome_distribution": {},
+            "strike_price_stats": None,
+            "twap_vs_strike_stats": None,
+        }
+
+    total = len(rows)
+    agreements = sum(1 for r in rows if r.get("agreement") is True)
+    disagreements = sum(1 for r in rows if r.get("agreement") is False)
+    unknown = total - agreements - disagreements
+
+    # Outcome distribution
+    outcomes = {}
+    for r in rows:
+        o = r.get("official_outcome") or r.get("local_outcome") or "unknown"
+        outcomes[o] = outcomes.get(o, 0) + 1
+
+    # Strike method breakdown
+    by_method: dict[str, dict] = {}
+    for r in rows:
+        method = r.get("strike_method") or "unknown"
+        if method not in by_method:
+            by_method[method] = {"method": method, "total": 0, "agreements": 0, "disagreements": 0}
+        by_method[method]["total"] += 1
+        if r.get("agreement") is True:
+            by_method[method]["agreements"] += 1
+        elif r.get("agreement") is False:
+            by_method[method]["disagreements"] += 1
+    method_breakdown = []
+    for m, s in sorted(by_method.items(), key=lambda x: -x[1]["total"]):
+        s["agreement_pct"] = round(s["agreements"] / s["total"] * 100, 1) if s["total"] > 0 else 0
+        method_breakdown.append(s)
+
+    # Strike price stats (from resolution_audit)
+    strike_prices = [r["strike_price"] for r in rows if r.get("strike_price") is not None]
+    strike_stats = None
+    if strike_prices:
+        strike_stats = {
+            "count": len(strike_prices),
+            "min": round(min(strike_prices), 2),
+            "max": round(max(strike_prices), 2),
+            "mean": round(sum(strike_prices) / len(strike_prices), 2),
+        }
+
+    # TWAP vs strike discrepancy
+    twap_diffs = []
+    for r in rows:
+        sp = r.get("strike_price")
+        tp = r.get("twap_price")
+        if sp is not None and tp is not None and sp > 0:
+            twap_diffs.append({
+                "absolute": round(abs(tp - sp), 2),
+                "percent": round(abs(tp - sp) / sp * 100, 6),
+                "direction": "above" if tp > sp else "below" if tp < sp else "equal",
+            })
+    twap_stats = None
+    if twap_diffs:
+        abs_diffs = [d["absolute"] for d in twap_diffs]
+        pct_diffs = [d["percent"] for d in twap_diffs]
+        twap_stats = {
+            "count": len(twap_diffs),
+            "mean_absolute": round(sum(abs_diffs) / len(abs_diffs), 2),
+            "median_absolute": round(sorted(abs_diffs)[len(abs_diffs) // 2], 2),
+            "max_absolute": round(max(abs_diffs), 2),
+            "mean_percent": round(sum(pct_diffs) / len(pct_diffs), 6),
+            "max_percent": round(max(pct_diffs), 6),
+            "above_count": sum(1 for d in twap_diffs if d["direction"] == "above"),
+            "below_count": sum(1 for d in twap_diffs if d["direction"] == "below"),
+            "equal_count": sum(1 for d in twap_diffs if d["direction"] == "equal"),
+        }
+
+    # Strike source breakdown (from enriched signal metadata)
+    source_dist: dict[str, dict] = {}
+    for r in rows:
+        src = r.get("strike_source") or "unknown"
+        if src not in source_dist:
+            source_dist[src] = {"source": src, "total": 0, "agreements": 0}
+        source_dist[src]["total"] += 1
+        if r.get("agreement") is True:
+            source_dist[src]["agreements"] += 1
+    source_breakdown = []
+    for s in sorted(source_dist.values(), key=lambda x: -x["total"]):
+        s["agreement_pct"] = round(s["agreements"] / s["total"] * 100, 1) if s["total"] > 0 else 0
+        source_breakdown.append(s)
+
+    return {
+        "total_markets": total,
+        "agreement_count": agreements,
+        "disagreement_count": disagreements,
+        "unknown_count": unknown,
+        "agreement_pct": round(agreements / total * 100, 1) if total > 0 else 0,
+        "outcome_distribution": outcomes,
+        "strike_method_breakdown": method_breakdown,
+        "strike_source_breakdown": source_breakdown,
+        "strike_price_stats": strike_stats,
+        "twap_vs_strike_stats": twap_stats,
+    }

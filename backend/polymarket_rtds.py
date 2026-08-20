@@ -20,6 +20,7 @@ import time
 import json
 import logging
 import threading
+import uuid
 from collections import deque
 
 log = logging.getLogger("verge.rtds")
@@ -34,6 +35,15 @@ RECONNECT_MULTIPLIER = 1.5  # exponential backoff multiplier
 _rtds_thread: threading.Thread | None = None
 _last_tick_ms: int = 0
 _tick_count: int = 0
+_connection_count: int = 0
+_reconnect_count: int = 0
+_malformed_count: int = 0
+_db_write_failures: int = 0
+_duplicate_count: int = 0
+_out_of_order_count: int = 0
+_largest_gap_ms: int = 0
+_last_connection_id: str | None = None
+_seen_observations: set[tuple[int, float]] = set()
 
 
 class TickRingBuffer:
@@ -93,6 +103,8 @@ def start_rtds_thread() -> threading.Thread:
                 _connect_and_read()
                 delay_ms = RECONNECT_BASE_MS  # reset on clean exit
             except Exception as e:
+                global _reconnect_count
+                _reconnect_count += 1
                 log.warning(f"RTDS dropped, reconnecting in {delay_ms}ms: {e}")
                 time.sleep(delay_ms / 1000)
                 delay_ms = min(int(delay_ms * RECONNECT_MULTIPLIER), RECONNECT_MAX_MS)
@@ -113,6 +125,7 @@ def _connect_and_read():
 
     async def _async_connect():
         import websockets
+        global _connection_count, _last_connection_id
 
         async with websockets.connect(
             RTDS_URL,
@@ -121,13 +134,15 @@ def _connect_and_read():
             ping_interval=None,  # we handle PING ourselves
             ping_timeout=None,
         ) as ws:
+            _connection_count += 1
+            _last_connection_id = str(uuid.uuid4())
             # Subscribe to Chainlink BTC price feed
             await ws.send(json.dumps({
                 "action": "subscribe",
                 "subscriptions": [{
                     "topic": "crypto_prices_chainlink",
                     "type": "*",
-                    "filters": "",
+                    "filters": "{\"symbol\":\"btc/usd\"}",
                 }],
             }))
             log.info("RTDS connected, subscribed to crypto_prices_chainlink")
@@ -166,11 +181,13 @@ def _handle_tick(raw_message: str) -> None:
     Defensive parsing: tries multiple field names for both price and timestamp
     since the Polymarket WS schema may change.
     """
-    global _last_tick_ms, _tick_count
+    global _last_tick_ms, _tick_count, _malformed_count, _db_write_failures
+    global _duplicate_count, _out_of_order_count, _largest_gap_ms
 
     try:
         msg = json.loads(raw_message)
     except (json.JSONDecodeError, ValueError):
+        _malformed_count += 1
         return
 
     # Only process Chainlink BTC price messages
@@ -178,6 +195,9 @@ def _handle_tick(raw_message: str) -> None:
         return
 
     payload = msg.get("payload") or {}
+    if not isinstance(payload, dict):
+        _malformed_count += 1
+        return
 
     # Flexible symbol extraction
     symbol = str(
@@ -197,14 +217,17 @@ def _handle_tick(raw_message: str) -> None:
         or payload.get("data")
     )
     if price is None:
+        _malformed_count += 1
         return
 
     try:
         price = float(price)
     except (TypeError, ValueError):
+        _malformed_count += 1
         return
 
     if price <= 0:
+        _malformed_count += 1
         return
 
     # Flexible timestamp extraction
@@ -214,6 +237,19 @@ def _handle_tick(raw_message: str) -> None:
         or payload.get("ts")
     )
     ts_ms = _parse_timestamp(ts_raw)
+    observation_key = (ts_ms, price)
+    if observation_key in _seen_observations:
+        _duplicate_count += 1
+        return
+    _seen_observations.add(observation_key)
+    if len(_seen_observations) > 5000:
+        _seen_observations.clear()
+
+    if _last_tick_ms and ts_ms < _last_tick_ms:
+        _out_of_order_count += 1
+        return
+    if _last_tick_ms:
+        _largest_gap_ms = max(_largest_gap_ms, ts_ms - _last_tick_ms)
 
     # Write to ring buffer (fast, in-memory) then DB (durable record)
     import db
@@ -232,6 +268,7 @@ def _handle_tick(raw_message: str) -> None:
             log.info(f"RTDS: {_tick_count} ticks written, last=${price:,.2f}")
 
     except Exception as e:
+        _db_write_failures += 1
         log.warning(f"RTDS: failed to write tick: {e}")
 
 
@@ -265,4 +302,12 @@ def get_rtds_health() -> dict:
         "tick_count": _tick_count,
         "last_tick_age_ms": now_ms - _last_tick_ms if _last_tick_ms > 0 else None,
         "running": _rtds_thread is not None and _rtds_thread.is_alive(),
+        "connection_count": _connection_count,
+        "reconnect_count": _reconnect_count,
+        "connection_id": _last_connection_id,
+        "malformed_count": _malformed_count,
+        "db_write_failures": _db_write_failures,
+        "duplicate_count": _duplicate_count,
+        "out_of_order_count": _out_of_order_count,
+        "largest_gap_ms": _largest_gap_ms,
     }

@@ -255,20 +255,30 @@ def get_polymarket_live_market(series_slug: str = "btc-up-or-down-15m") -> dict 
                 # Parse priceToBeat
                 metadata = event.get("eventMetadata") or {}
                 ptb = metadata.get("priceToBeat")
-                price_to_beat = float(ptb) if ptb else None
+                price_to_beat_source = None
+                try:
+                    price_to_beat = float(ptb) if ptb else None
+                    if price_to_beat is not None and price_to_beat > 0:
+                        price_to_beat_source = "polymarket_price_to_beat"
+                    else:
+                        price_to_beat = None
+                except (TypeError, ValueError):
+                    price_to_beat = None
 
                 # 15m fallback: use get_15m_opening_reference (60s TWAP)
                 if price_to_beat is None and "15m" in series_slug:
                     try:
                         from polymarket_fetcher import get_15m_opening_reference
-                        ptb, _ = get_15m_opening_reference(start_ms)
+                        ptb, fallback_source = get_15m_opening_reference(start_ms)
                         if ptb:
                             price_to_beat = ptb
+                            price_to_beat_source = fallback_source
                     except Exception:
                         pass
 
                 return {
                     "price_to_beat": price_to_beat,
+                    "price_to_beat_source": price_to_beat_source,
                     "up_odds": up_odds,
                     "down_odds": down_odds,
                     "question": market.get("question", ""),
@@ -323,7 +333,9 @@ def get_15m_opening_reference(window_start_ms: int) -> tuple[float | None, str]:
             ptb = metadata.get("priceToBeat")
             if ptb:
                 try:
-                    return float(ptb), "gamma_price_to_beat"
+                    price_to_beat = float(ptb)
+                    if price_to_beat > 0:
+                        return price_to_beat, "polymarket_price_to_beat"
                 except (TypeError, ValueError):
                     pass
     except Exception:

@@ -147,7 +147,19 @@ def signal():
             "fee_eroded": sig.fee_eroded,
             "suggested_price": sig.suggested_price,
             "strike_price": sig.strike_price,
+            "strike_source": sig.strike_source,
             "current_price": sig.current_price,
+            "price_source": sig.price_source,
+            "reference_status": sig.reference_status,
+            "reference_age_ms": sig.reference_age_ms,
+            "quality_status": sig.quality_status,
+            "current_reference": sig.current_price,
+            "current_reference_source": sig.price_source,
+            "reference_quality": sig.quality_status,
+            "fallback_used": sig.reference_status == "fallback",
+            "reference_age_seconds": round(sig.reference_age_ms / 1000, 2) if sig.reference_age_ms else None,
+            "difference": round(sig.current_price - sig.strike_price, 2) if sig.current_price and sig.strike_price else None,
+            "difference_percent": round((sig.current_price - sig.strike_price) / sig.strike_price * 100, 6) if sig.current_price and sig.strike_price else None,
             "note": sig.note,
             "divergence_signal": sig.divergence_signal,
             "fear_greed_value": sig.fear_greed_value,
@@ -805,7 +817,7 @@ def window_outcomes_recent():
 @app.route("/api/diagnostics", methods=["GET"])
 @require_secret
 def api_diagnostics():
-    """Diagnostics endpoint: source breakdown, live prices, recent signals, accuracy, TWAP vs tick."""
+    """Diagnostics endpoint: source breakdown, live prices, reference audit, and resolution health."""
     import time as _time
     import db
     from engine import compute_twap
@@ -813,20 +825,22 @@ def api_diagnostics():
     from pyth_fetcher import get_pyth_btc_price_value
     from data_fetcher import get_spot_price
     from polymarket_fetcher import get_polymarket_live_market
+    from price_reference import assess_observation_health, build_reference_audit, compare_prices
 
     now_ms = int(_time.time() * 1000)
     client = db.get_client()
 
-    # 1. Source breakdown (last 24h)
     source_stats = db.get_source_breakdown(client, since_ms=now_ms - 86_400_000)
 
-    # 2. Live prices from each source
-    twap_ticks = db.get_recent_price_snapshots(client, "rtds_chainlink", "BTCUSD",
-                                                since_ms=now_ms - 90_000)
-    from polymarket_rtds import get_rtds_ticks
-    rtds_ticks = get_rtds_ticks(since_ms=now_ms - 30_000)
+    twap_ticks = db.get_recent_price_snapshots(
+        client, "rtds_chainlink", "BTCUSD", since_ms=now_ms - 90_000
+    )
+    from polymarket_rtds import get_rtds_health, get_rtds_ticks
+    rtds_ticks = get_rtds_ticks(since_ms=now_ms - 90_000)
+    rtds_health_detail = assess_observation_health(rtds_ticks, now_ms=now_ms)
     latest_rtds = rtds_ticks[-1]["price"] if rtds_ticks else None
-    from chainlink_ws import get_chainlink_ws_price
+
+    from chainlink_ws import get_chainlink_ws_health, get_chainlink_ws_price
     live = {
         "polymarket_rtds_chainlink": latest_rtds,
         "polymarket_rtds_60s_twap_estimate": compute_twap(twap_ticks, now_ms) if len(twap_ticks) >= 2 else None,
@@ -836,39 +850,26 @@ def api_diagnostics():
         "coinbase_spot": get_spot_price(),
     }
 
-    # RTDS health info
-    from polymarket_rtds import get_rtds_health
     rtds_health = get_rtds_health()
     live["rtds_tick_count_5m"] = len(db.get_recent_price_snapshots(
         client, "rtds_chainlink", "BTCUSD", since_ms=now_ms - 300_000
     ))
     live["rtds_last_tick_age_ms"] = rtds_health["last_tick_age_ms"]
+    live["rtds_quality"] = rtds_health_detail.to_dict()
+    live["rtds_connection_health"] = rtds_health
 
-    # Chainlink WSS health info
-    from chainlink_ws import get_chainlink_ws_health
     ws_health = get_chainlink_ws_health()
     live["chainlink_ws_age_ms"] = ws_health["last_tick_age_ms"]
 
-    # RPC health info
     from chainlink_fetcher import get_rpc_health
     rpc_health = get_rpc_health()
 
-    # 3. Recent signals with source
     recent_signals = db.get_recent_signals_with_source(client, limit=20)
-
-    # 4. Resolution accuracy by source
     accuracy = db.get_resolution_accuracy_by_source(client)
-
-    # 5. Resolution agreement (Verge vs Polymarket official)
     resolution_agreement = db.get_resolution_agreement(client)
-
-    # 5b. Resolution audit summary (per strike-method breakdown)
     resolution_audit = db.get_resolution_audit_summary(client)
-
-    # 5c. Strike source distribution (from recent signals)
     strike_source_dist = db.get_strike_source_distribution(client)
 
-    # 6. TWAP vs single-tick comparison
     last_tick = twap_ticks[-1].price if twap_ticks else None
     twap_val = live["polymarket_rtds_60s_twap_estimate"]
     twap_vs_tick = {
@@ -878,32 +879,57 @@ def api_diagnostics():
             if twap_val and last_tick else None,
     }
 
-    # 7. Polymarket live market comparison (15m + 1h)
     pm_15m = get_polymarket_live_market("btc-up-or-down-15m")
     pm_1h = get_polymarket_live_market("btc-up-or-down-hourly")
 
-    # Compute Verge's best available price for comparison
-    verge_price = (
+    verge_reference = (
         live.get("polymarket_rtds_60s_twap_estimate")
         or live.get("chainlink_onchain")
         or live.get("pyth")
         or live.get("coinbase_spot")
     )
+    if live.get("polymarket_rtds_60s_twap_estimate"):
+        verge_reference_source = "polymarket_rtds_60s_twap_estimate"
+    elif live.get("chainlink_onchain"):
+        verge_reference_source = "chainlink_onchain"
+    elif live.get("pyth"):
+        verge_reference_source = "pyth"
+    elif live.get("coinbase_spot"):
+        verge_reference_source = "coinbase_spot"
+    else:
+        verge_reference_source = None
 
     def _enrich_pm(pm_data):
-        if not pm_data or not verge_price:
+        if not pm_data:
             return pm_data
         strike = pm_data.get("price_to_beat")
+        strike_source = pm_data.get("price_to_beat_source") or ("polymarket_price_to_beat" if strike else None)
         return {
             **pm_data,
-            "verge_price": verge_price,
-            "difference": round(abs(strike - verge_price), 2) if strike else None,
+            "price_to_beat_source": strike_source,
+            "strike_comparison": compare_prices(strike, strike),
+            "current_reference_comparison": compare_prices(verge_reference, strike),
+            "verge_current_reference": verge_reference,
+            "verge_current_reference_source": verge_reference_source,
         }
 
     polymarket_live = {
         "15m": _enrich_pm(pm_15m),
         "1h": _enrich_pm(pm_1h),
     }
+
+    reference_audit_15m = build_reference_audit(
+        market_id=pm_15m.get("condition_id") if pm_15m else None,
+        window_start=None,
+        window_end=None,
+        price_to_beat=pm_15m.get("price_to_beat") if pm_15m else None,
+        price_to_beat_source=pm_15m.get("price_to_beat_source") if pm_15m else None,
+        current_reference=verge_reference,
+        current_reference_source=verge_reference_source,
+        reference_health=rtds_health_detail,
+        opening_reference=pm_15m.get("price_to_beat") if pm_15m else None,
+        opening_reference_source=pm_15m.get("price_to_beat_source") if pm_15m else None,
+    )
 
     return jsonify({
         "source_breakdown": source_stats,
@@ -915,9 +941,259 @@ def api_diagnostics():
         "strike_source_distribution": strike_source_dist,
         "twap_vs_tick": twap_vs_tick,
         "polymarket_live": polymarket_live,
+        "reference_audit_15m": reference_audit_15m,
         "source_comparison": _source_comparison(client, now_ms),
+        "rpc_health": rpc_health,
         "timestamp": now_ms,
     })
+
+
+@app.route("/api/price-reference", methods=["GET"])
+@require_secret
+def api_price_reference():
+    """15m price-reference audit endpoint."""
+    try:
+        import time as _time
+        import db
+        from engine import compute_twap, get_current_market
+        from polymarket_rtds import get_rtds_ticks
+        from price_reference import assess_observation_health, build_reference_audit
+
+        duration = request.args.get("duration", "15m")
+        if duration != "15m":
+            return jsonify({"error": "price-reference audit is currently scoped to 15m"}), 400
+
+        now_ms = int(_time.time() * 1000)
+        market = get_current_market("15m")
+        rtds_ticks = get_rtds_ticks(since_ms=now_ms - 90_000)
+        health = assess_observation_health(rtds_ticks, now_ms=now_ms)
+        latest = rtds_ticks[-1] if rtds_ticks else None
+
+        client = db.get_client()
+        persisted_ticks = db.get_recent_price_snapshots(
+            client, "rtds_chainlink", "BTCUSD", since_ms=now_ms - 90_000
+        )
+        twap = compute_twap(persisted_ticks, now_ms) if len(persisted_ticks) >= 2 else None
+
+        strike = market.get("price_to_beat") if market else None
+        strike_value = float(strike) if strike is not None else None
+        strike_source = market.get("price_to_beat_source") if market else None
+        audit = build_reference_audit(
+            market_id=(market.get("market_id") or market.get("condition_id")) if market else None,
+            window_start=market.get("window_open") if market else None,
+            window_end=market.get("window_end") if market else None,
+            price_to_beat=strike_value,
+            price_to_beat_source=strike_source,
+            current_reference=latest.get("price") if latest else None,
+            current_reference_source="rtds_chainlink" if latest else None,
+            reference_health=health,
+            opening_reference=strike_value,
+            opening_reference_source=strike_source,
+        )
+        return jsonify({
+            "market": market,
+            "reference": {
+                "source": "rtds_chainlink" if latest else None,
+                "price": latest.get("price") if latest else None,
+                "observed_at_ms": latest.get("timestamp_ms") if latest else None,
+            },
+            "twap_estimate": {
+                "window_seconds": 60,
+                "value": twap,
+                "source": "polymarket_rtds_60s_twap_estimate",
+                "quality": health.status,
+            },
+            "audit": audit,
+            "timestamp": now_ms,
+        })
+    except Exception as e:
+        log.exception("price-reference audit failed")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/diagnostics/reference/<market_id>")
+@require_secret
+def api_diagnostics_reference(market_id):
+    """Per-market reference audit: inspect strike, current reference, and health for a specific market."""
+    try:
+        import time as _time
+        import db
+        from engine import compute_twap, get_current_market
+        from polymarket_rtds import get_rtds_ticks
+        from price_reference import assess_observation_health, build_reference_audit
+
+        now_ms = int(_time.time() * 1000)
+        client = db.get_client()
+
+        # Try to fetch market data from Gamma API by condition_id
+        market_data = None
+        try:
+            resp = __import__("requests").get(
+                f"https://gamma-api.polymarket.com/markets/{market_id}",
+                timeout=10,
+            )
+            if resp.ok:
+                market_data = resp.json()
+        except Exception:
+            pass
+
+        if not market_data:
+            # Try querying by condition_ids
+            try:
+                resp = __import__("requests").get(
+                    "https://gamma-api.polymarket.com/markets",
+                    params={"condition_ids": market_id},
+                    timeout=10,
+                )
+                if resp.ok:
+                    result = resp.json()
+                    if isinstance(result, list) and result:
+                        market_data = result[0]
+            except Exception:
+                pass
+
+        if not market_data:
+            return jsonify({"error": f"Market {market_id} not found"}), 404
+
+        # Extract strike from eventMetadata or market data
+        from datetime import datetime
+        event_start = market_data.get("eventStartTime") or market_data.get("startDate")
+        event_end = market_data.get("endDate")
+        window_start = None
+        window_end = None
+        if event_start:
+            try:
+                start_dt = datetime.fromisoformat(event_start.replace("Z", "+00:00"))
+                window_start = int(start_dt.timestamp() * 1000)
+            except (ValueError, TypeError):
+                pass
+        if event_end:
+            try:
+                end_dt = datetime.fromisoformat(event_end.replace("Z", "+00:00"))
+                window_end = int(end_dt.timestamp() * 1000)
+            except (ValueError, TypeError):
+                pass
+
+        # Get strike price
+        outcome_prices_raw = market_data.get("outcomePrices")
+        up_odds = None
+        if outcome_prices_raw:
+            try:
+                import json as _json
+                prices = _json.loads(outcome_prices_raw) if isinstance(outcome_prices_raw, str) else outcome_prices_raw
+                if prices:
+                    up_odds = float(prices[0])
+            except Exception:
+                pass
+
+        strike_price = None
+        strike_source = None
+        # Check the parent event for priceToBeat
+        event_id = market_data.get("eventId")
+        if event_id:
+            try:
+                evt_resp = __import__("requests").get(
+                    f"https://gamma-api.polymarket.com/events/{event_id}",
+                    timeout=10,
+                )
+                if evt_resp.ok:
+                    evt = evt_resp.json()
+                    metadata = evt.get("eventMetadata") or {}
+                    ptb = metadata.get("priceToBeat")
+                    if ptb:
+                        try:
+                            strike_price = float(ptb)
+                            if strike_price > 0:
+                                strike_source = "polymarket_price_to_beat"
+                            else:
+                                strike_price = None
+                        except (TypeError, ValueError):
+                            strike_price = None
+            except Exception:
+                pass
+
+        # Get RTDS ticks and health
+        rtds_ticks = get_rtds_ticks(since_ms=now_ms - 90_000)
+        health = assess_observation_health(rtds_ticks, now_ms=now_ms)
+        latest = rtds_ticks[-1] if rtds_ticks else None
+
+        current_reference = latest["price"] if latest else None
+        current_reference_source = "rtds_chainlink" if latest else None
+
+        # TWAP estimate
+        persisted_ticks = db.get_recent_price_snapshots(
+            client, "rtds_chainlink", "BTCUSD", since_ms=now_ms - 90_000
+        )
+        twap = compute_twap(persisted_ticks, now_ms) if len(persisted_ticks) >= 2 else None
+
+        audit = build_reference_audit(
+            market_id=market_id,
+            window_start=window_start,
+            window_end=window_end,
+            price_to_beat=strike_price,
+            price_to_beat_source=strike_source,
+            current_reference=current_reference,
+            current_reference_source=current_reference_source,
+            reference_health=health,
+            opening_reference=strike_price,
+            opening_reference_source=strike_source,
+        )
+
+        return jsonify({
+            "market_id": market_id,
+            "window_start": window_start,
+            "window_end": window_end,
+            "price_to_beat": strike_price,
+            "price_to_beat_source": strike_source,
+            "current_reference": current_reference,
+            "current_reference_source": current_reference_source,
+            "reference_quality": health.status if health else None,
+            "twap_estimate": twap,
+            "up_odds": up_odds,
+            "question": market_data.get("question", ""),
+            "audit": audit,
+            "timestamp": now_ms,
+        })
+    except Exception as e:
+        log.exception("diagnostics/reference audit failed")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/diagnostics/resolution-audit")
+@require_secret
+def api_resolution_audit():
+    """Historical resolution audit: per-row data and aggregate statistics for 15m validation.
+
+    Query params:
+        duration — filter by "15m" or "1h" (default: all)
+        limit    — max rows (default: 100, max: 1000)
+        offset   — pagination offset (default: 0)
+        stats    — if "true", include aggregate statistics
+    """
+    try:
+        import db
+        duration = request.args.get("duration")
+        limit = min(int(request.args.get("limit", 100)), 1000)
+        offset = int(request.args.get("offset", 0))
+        include_stats = request.args.get("stats", "true").lower() == "true"
+
+        client = db.get_client()
+        rows = db.get_resolution_audit_rows(
+            client, duration=duration, limit=limit, offset=offset,
+        )
+        stats = db.get_resolution_audit_statistics(client, duration=duration) if include_stats else None
+
+        return jsonify({
+            "rows": rows,
+            "count": len(rows),
+            "offset": offset,
+            "limit": limit,
+            "duration_filter": duration,
+            "statistics": stats,
+        })
+    except Exception as e:
+        log.exception("resolution-audit query failed")
+        return jsonify({"error": str(e)}), 500
 
 
 def _source_comparison(client, now_ms: int) -> list[dict]:
