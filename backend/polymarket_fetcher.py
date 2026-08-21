@@ -312,7 +312,8 @@ def get_15m_opening_reference(window_start_ms: int) -> tuple[float | None, str]:
     # 1. RTDS Chainlink 60s TWAP from in-memory ring buffer (no DB hit)
     try:
         from polymarket_rtds import get_rtds_ticks
-        from engine import compute_twap, PriceSnapshotRow
+        from engine import compute_twap
+        from db import PriceSnapshotRow
         ticks = get_rtds_ticks(since_ms=window_start_ms - 65_000)
         if ticks:
             rows = [PriceSnapshotRow(source="rtds_chainlink", symbol="BTCUSD",
@@ -327,7 +328,8 @@ def get_15m_opening_reference(window_start_ms: int) -> tuple[float | None, str]:
     # 2. RTDS Chainlink 60s TWAP from DB snapshots (after restart, buffer empty)
     try:
         import db
-        from engine import compute_twap, PriceSnapshotRow
+        from engine import compute_twap
+        from db import PriceSnapshotRow
         client = db.get_client()
         ticks = db.get_price_snapshots(
             client, source="rtds_chainlink", symbol="BTCUSD",
@@ -349,7 +351,8 @@ def get_15m_opening_reference(window_start_ms: int) -> tuple[float | None, str]:
     # 3. On-chain Chainlink 60s TWAP from DB snapshots
     try:
         import db
-        from engine import compute_twap, PriceSnapshotRow
+        from engine import compute_twap
+        from db import PriceSnapshotRow
         client = db.get_client()
         ticks = db.get_price_snapshots(
             client, source="chainlink_onchain", symbol="BTC",

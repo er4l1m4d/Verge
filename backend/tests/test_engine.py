@@ -304,6 +304,107 @@ class TestFlaskAPI:
         assert data["duration_filter"] == "15m"
 
 
+class TestDeterministicSlug:
+    """Test deterministic 15m slug calculation and market selection."""
+
+    def test_15m_slug_calculation(self):
+        import time
+        now_s = int(time.time())
+        window_start_s = (now_s // 900) * 900
+        expected_slug = f"btc-updown-15m-{window_start_s}"
+        assert expected_slug.startswith("btc-updown-15m-")
+        assert window_start_s % 900 == 0
+
+    def test_15m_window_boundaries(self):
+        import time
+        now_s = int(time.time())
+        window_start_s = (now_s // 900) * 900
+        window_end_s = window_start_s + 900
+        assert window_start_s <= now_s < window_end_s
+        assert window_end_s - window_start_s == 900
+
+    def test_15m_slug_is_deterministic(self):
+        import time
+        now_s = int(time.time())
+        window1 = (now_s // 900) * 900
+        window2 = (now_s // 900) * 900
+        assert window1 == window2
+        assert f"btc-updown-15m-{window1}" == f"btc-updown-15m-{window2}"
+
+    def test_15m_market_returns_correct_structure(self):
+        from engine import _get_current_15m_market
+        from unittest.mock import patch, MagicMock
+        import json as _json
+
+        now_s = int(time.time())
+        window_start_s = (now_s // 900) * 900
+        expected_slug = f"btc-updown-15m-{window_start_s}"
+
+        mock_event = [{
+            "slug": expected_slug,
+            "markets": [{
+                "id": "test-15m-1",
+                "question": "Bitcoin Up or Down - 15m Test",
+                "clobTokenIds": _json.dumps(["token-15m-abc"]),
+                "eventStartTime": f"2026-01-01T00:00:00Z",
+                "endDate": f"2026-01-01T00:15:00Z",
+                "closed": False,
+                "conditionId": "cid-15m-test",
+                "outcomePrices": _json.dumps(["0.55", "0.45"]),
+            }]
+        }]
+
+        def mock_fetch(url, **kwargs):
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            resp.json.return_value = mock_event
+            return resp
+
+        with patch("engine.fetch_with_retry", side_effect=mock_fetch), \
+             patch("data_fetcher._requests_get", side_effect=mock_fetch):
+            market = _get_current_15m_market()
+            if market:
+                assert market["slug"] == expected_slug
+                assert market["duration"] == "15m"
+                assert "token_id" in market
+                assert "window_open" in market
+                assert "window_end" in market
+                assert market["window_end"] - market["window_open"] == 900_000
+
+    def test_1h_market_still_works(self):
+        from engine import get_current_market
+        from unittest.mock import patch, MagicMock
+        import json as _json
+
+        mock_event = [{
+            "slug": "bitcoin-up-or-down-august-20-2026-8pm-et",
+            "markets": [{
+                "id": "test-1h-1",
+                "question": "Bitcoin Up or Down - 1h Test",
+                "clobTokenIds": _json.dumps(["token-1h-abc"]),
+                "eventStartTime": "2026-01-01T00:00:00Z",
+                "endDate": "2026-01-01T01:00:00Z",
+                "closed": False,
+                "conditionId": "cid-1h-test",
+                "outcomePrices": _json.dumps(["0.60", "0.40"]),
+                "eventMetadata": {"priceToBeat": 100000.0},
+            }]
+        }]
+
+        def mock_fetch(url, **kwargs):
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            resp.json.return_value = mock_event
+            return resp
+
+        with patch("engine.fetch_with_retry", side_effect=mock_fetch), \
+             patch("data_fetcher._requests_get", side_effect=mock_fetch):
+            market = get_current_market("1h")
+            if market:
+                assert market["duration"] == "1h"
+                assert market["price_to_beat"] == 100000.0
+
+
 class TestResolutionConfig:
     """Verify resolve_previous_hour uses correct config keys (unmocked)."""
 

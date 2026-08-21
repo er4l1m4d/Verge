@@ -1196,6 +1196,154 @@ def api_resolution_audit():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/diagnostics/15m-reference")
+@require_secret
+def api_15m_reference():
+    """Three-way comparison for 15m strike: Gamma priceToBeat vs RTDS TWAP vs market identity.
+
+    Returns the exact market selected, its metadata, and both price sources
+    so the discrepancy can be pinpointed.
+    """
+    try:
+        import time as _time
+        import db
+        from engine import _get_current_15m_market, compute_twap
+        from db import PriceSnapshotRow
+        from polymarket_rtds import get_rtds_ticks
+        from price_reference import assess_observation_health
+
+        now_ms = int(_time.time() * 1000)
+        client = db.get_client()
+
+        # 1. Get exact market via deterministic slug
+        market = _get_current_15m_market()
+
+        if not market:
+            return jsonify({"error": "No active 15m market found"}), 404
+
+        window_start = market["window_open"]
+        window_end = market["window_end"]
+        slug = market["slug"]
+        market_id = market.get("market_id")
+        condition_id = market.get("condition_id")
+
+        # 2. Gamma priceToBeat
+        gamma_ptb = market.get("price_to_beat")
+        gamma_ptb_source = market.get("price_to_beat_source")
+
+        # 3. RTDS opening 60s TWAP from ring buffer
+        rtds_ticks_buf = get_rtds_ticks(since_ms=window_start - 65_000)
+        rtds_twap = None
+        rtds_samples = 0
+        rtds_first_ts = None
+        rtds_last_ts = None
+        rtds_largest_gap_ms = None
+
+        if rtds_ticks_buf:
+            rows = [PriceSnapshotRow(source="rtds_chainlink", symbol="BTCUSD",
+                                     price=t["price"], timestamp_ms=t["timestamp_ms"])
+                    for t in rtds_ticks_buf]
+            window_rows = [r for r in rows
+                           if window_start - 60_000 <= r.timestamp_ms <= window_start]
+            if len(window_rows) >= 2:
+                rtds_twap = compute_twap(window_rows, window_end_ms=window_start, window_seconds=60)
+                rtds_samples = len(window_rows)
+                rtds_first_ts = window_rows[0].timestamp_ms
+                rtds_last_ts = window_rows[-1].timestamp_ms
+                gaps = [window_rows[i].timestamp_ms - window_rows[i-1].timestamp_ms
+                        for i in range(1, len(window_rows))]
+                rtds_largest_gap_ms = max(gaps) if gaps else 0
+
+        # 4. RTDS opening TWAP from DB (if ring buffer empty)
+        rtds_twap_db = None
+        rtds_samples_db = 0
+        rtds_first_ts_db = None
+        rtds_last_ts_db = None
+        rtds_largest_gap_ms_db = None
+
+        try:
+            db_ticks = db.get_price_snapshots(
+                client, source="rtds_chainlink", symbol="BTCUSD",
+                since_ms=window_start - 65_000, limit=120,
+            )
+            db_window = [t for t in db_ticks
+                         if window_start - 60_000 <= t["timestamp_ms"] <= window_start]
+            if len(db_window) >= 2:
+                db_rows = [PriceSnapshotRow(source="rtds_chainlink", symbol="BTCUSD",
+                                            price=t["price"], timestamp_ms=t["timestamp_ms"])
+                           for t in db_window]
+                rtds_twap_db = compute_twap(db_rows, window_end_ms=window_start, window_seconds=60)
+                rtds_samples_db = len(db_window)
+                rtds_first_ts_db = db_window[0]["timestamp_ms"]
+                rtds_last_ts_db = db_window[-1]["timestamp_ms"]
+                gaps = [db_window[i]["timestamp_ms"] - db_window[i-1]["timestamp_ms"]
+                        for i in range(1, len(db_window))]
+                rtds_largest_gap_ms_db = max(gaps) if gaps else 0
+        except Exception:
+            pass
+
+        # 5. RTDS health
+        health = assess_observation_health(rtds_ticks_buf, now_ms=now_ms)
+
+        # 6. Comparison
+        best_twap = rtds_twap or rtds_twap_db
+        best_source = "rtds_ring_buffer" if rtds_twap else ("rtds_db" if rtds_twap_db else None)
+
+        difference = None
+        difference_bps = None
+        if gamma_ptb and best_twap:
+            try:
+                gamma_val = float(gamma_ptb)
+                difference = round(gamma_val - best_twap, 2)
+                difference_bps = round(abs(difference) / best_twap * 10_000, 2) if best_twap else None
+            except (TypeError, ValueError):
+                pass
+
+        return jsonify({
+            "market": {
+                "slug": slug,
+                "market_id": market_id,
+                "condition_id": condition_id,
+                "window_start": window_start,
+                "window_end": window_end,
+                "question": market.get("question", ""),
+            },
+            "gamma": {
+                "price_to_beat": gamma_ptb,
+                "source": gamma_ptb_source,
+            },
+            "rtds_ring_buffer": {
+                "twap_60s": rtds_twap,
+                "samples": rtds_samples,
+                "first_timestamp": rtds_first_ts,
+                "last_timestamp": rtds_last_ts,
+                "largest_gap_ms": rtds_largest_gap_ms,
+            },
+            "rtds_db": {
+                "twap_60s": rtds_twap_db,
+                "samples": rtds_samples_db,
+                "first_timestamp": rtds_first_ts_db,
+                "last_timestamp": rtds_last_ts_db,
+                "largest_gap_ms": rtds_largest_gap_ms_db,
+            },
+            "best_twap": {
+                "value": best_twap,
+                "source": best_source,
+            },
+            "comparison": {
+                "gamma_price_to_beat": gamma_ptb,
+                "best_twap": best_twap,
+                "difference": difference,
+                "difference_bps": difference_bps,
+            },
+            "rtds_health": health.to_dict() if health else None,
+            "timestamp": now_ms,
+        })
+    except Exception as e:
+        log.exception("15m-reference diagnostic failed")
+        return jsonify({"error": str(e)}), 500
+
+
 def _source_comparison(client, now_ms: int) -> list[dict]:
     """Timestamp-aligned comparison of RTDS vs on-chain Chainlink prices.
 
