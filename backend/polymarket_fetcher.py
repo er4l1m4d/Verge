@@ -293,55 +293,23 @@ def get_polymarket_live_market(series_slug: str = "btc-up-or-down-15m") -> dict 
 def get_15m_opening_reference(window_start_ms: int) -> tuple[float | None, str]:
     """Recover the opening reference price for a 15m window.
 
-    RTDS Chainlink is the primary source — same feed Polymarket resolves against.
-    Falls back to on-chain Chainlink (same asset, different latency).
-    No Binance/Coinbase fallbacks — different exchanges, different prices.
+    The strike for 15m markets is the Chainlink BTC/USD 60-second TWAP
+    at the window start. Polymarket's eventMetadata.priceToBeat is NOT
+    populated for 15m markets — only for 1h markets.
 
-    Tries:
-      1. Gamma API eventMetadata.priceToBeat (official, if available)
-      2. RTDS Chainlink 60s TWAP at window start (ring buffer)
-      3. RTDS Chainlink tick at window start (DB fallback)
-      4. On-chain Chainlink tick at window start (DB fallback)
+    Source priority:
+      1. RTDS Chainlink 60s TWAP from in-memory ring buffer (fastest)
+      2. RTDS Chainlink 60s TWAP computed from DB snapshots (after restart)
+      3. On-chain Chainlink 60s TWAP computed from DB snapshots (fallback)
+      4. Single RTDS Chainlink tick at window start (sparse data fallback)
+      5. Single on-chain Chainlink tick at window start (last resort)
 
     Returns (price, source_label) or (None, "none").
     """
     import time
     import requests
 
-    # 1. Gamma API eventMetadata.priceToBeat (official Polymarket strike)
-    try:
-        resp = requests.get(f"{GAMMA_BASE}/events", params={
-            "limit": 5,
-            "series_slug": "btc-up-or-down-15m",
-            "closed": "false",
-        }, timeout=10)
-        resp.raise_for_status()
-        events = resp.json()
-        for event in (events if isinstance(events, list) else []):
-            event_start = event.get("eventStartTime") or event.get("startDate")
-            if not event_start:
-                continue
-            from datetime import datetime, timezone
-            try:
-                start_dt = datetime.fromisoformat(event_start.replace("Z", "+00:00"))
-                event_start_ms = int(start_dt.timestamp() * 1000)
-            except (ValueError, TypeError):
-                continue
-            if abs(event_start_ms - window_start_ms) > 900_000:
-                continue
-            metadata = event.get("eventMetadata") or {}
-            ptb = metadata.get("priceToBeat")
-            if ptb:
-                try:
-                    price_to_beat = float(ptb)
-                    if price_to_beat > 0:
-                        return price_to_beat, "polymarket_price_to_beat"
-                except (TypeError, ValueError):
-                    pass
-    except Exception:
-        pass
-
-    # 2. RTDS Chainlink 60s TWAP at window start (ring buffer, no DB hit)
+    # 1. RTDS Chainlink 60s TWAP from in-memory ring buffer (no DB hit)
     try:
         from polymarket_rtds import get_rtds_ticks
         from engine import compute_twap, PriceSnapshotRow
@@ -356,7 +324,50 @@ def get_15m_opening_reference(window_start_ms: int) -> tuple[float | None, str]:
     except ImportError:
         pass
 
-    # 3. RTDS Chainlink tick at window start (DB fallback — e.g. after restart)
+    # 2. RTDS Chainlink 60s TWAP from DB snapshots (after restart, buffer empty)
+    try:
+        import db
+        from engine import compute_twap, PriceSnapshotRow
+        client = db.get_client()
+        ticks = db.get_price_snapshots(
+            client, source="rtds_chainlink", symbol="BTCUSD",
+            since_ms=window_start_ms - 65_000, limit=120,
+        )
+        # Filter to the 60s window ending at window_start_ms
+        window_ticks = [t for t in ticks
+                        if window_start_ms - 60_000 <= t["timestamp_ms"] <= window_start_ms]
+        if len(window_ticks) >= 2:
+            rows = [PriceSnapshotRow(source="rtds_chainlink", symbol="BTCUSD",
+                                     price=t["price"], timestamp_ms=t["timestamp_ms"])
+                    for t in window_ticks]
+            twap = compute_twap(rows, window_end_ms=window_start_ms, window_seconds=60)
+            if twap:
+                return twap, "rtds_chainlink_twap_60s_db"
+    except Exception:
+        pass
+
+    # 3. On-chain Chainlink 60s TWAP from DB snapshots
+    try:
+        import db
+        from engine import compute_twap, PriceSnapshotRow
+        client = db.get_client()
+        ticks = db.get_price_snapshots(
+            client, source="chainlink_onchain", symbol="BTC",
+            since_ms=window_start_ms - 65_000, limit=120,
+        )
+        window_ticks = [t for t in ticks
+                        if window_start_ms - 60_000 <= t["timestamp_ms"] <= window_start_ms]
+        if len(window_ticks) >= 2:
+            rows = [PriceSnapshotRow(source="chainlink_onchain", symbol="BTC",
+                                     price=t["price"], timestamp_ms=t["timestamp_ms"])
+                    for t in window_ticks]
+            twap = compute_twap(rows, window_end_ms=window_start_ms, window_seconds=60)
+            if twap:
+                return twap, "chainlink_onchain_twap_60s"
+    except Exception:
+        pass
+
+    # 4. Single RTDS Chainlink tick at window start (sparse data — NOT a TWAP)
     try:
         import db
         client = db.get_client()
@@ -365,11 +376,11 @@ def get_15m_opening_reference(window_start_ms: int) -> tuple[float | None, str]:
             since_ms=window_start_ms - 5_000, limit=10,
         )
         if ticks:
-            return float(ticks[0]["price"]), "rtds_chainlink_tick"
+            return float(ticks[0]["price"]), "rtds_chainlink_tick_single"
     except Exception:
         pass
 
-    # 4. On-chain Chainlink tick at window start (DB fallback)
+    # 5. Single on-chain Chainlink tick at window start (last resort)
     try:
         import db
         client = db.get_client()
@@ -378,7 +389,7 @@ def get_15m_opening_reference(window_start_ms: int) -> tuple[float | None, str]:
             since_ms=window_start_ms - 5_000, limit=10,
         )
         if ticks:
-            return float(ticks[0]["price"]), "chainlink_onchain_tick"
+            return float(ticks[0]["price"]), "chainlink_onchain_tick_single"
     except Exception:
         pass
 

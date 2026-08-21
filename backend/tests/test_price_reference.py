@@ -29,7 +29,22 @@ def test_missing_malformed_or_non_positive_price_to_beat_is_invalid():
 
 def test_fallback_strike_is_not_high_quality():
     assert classify_strike_source("chainlink_onchain_tick", 116482.31) == QUALITY_FALLBACK
+    assert classify_strike_source("chainlink_onchain_tick_single", 116482.31) == QUALITY_FALLBACK
     assert classify_strike_source("binance_candle", 116482.31) == QUALITY_FALLBACK
+
+
+def test_twap_strikes_are_good_quality():
+    assert classify_strike_source("rtds_chainlink_twap_60s", 116482.31) == QUALITY_GOOD
+    assert classify_strike_source("rtds_chainlink_twap_60s_db", 116482.31) == QUALITY_GOOD
+
+
+def test_single_tick_strikes_are_degraded():
+    assert classify_strike_source("rtds_chainlink_tick", 116482.31) == QUALITY_DEGRADED
+    assert classify_strike_source("rtds_chainlink_tick_single", 116482.31) == QUALITY_DEGRADED
+
+
+def test_onchain_twap_is_fallback():
+    assert classify_strike_source("chainlink_onchain_twap_60s", 116482.31) == QUALITY_FALLBACK
 
 
 def test_fresh_rtds_observations_are_good():

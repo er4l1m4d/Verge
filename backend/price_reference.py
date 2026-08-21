@@ -46,9 +46,13 @@ def classify_strike_source(source: str | None, value: float | None) -> str:
         return QUALITY_INVALID
     if source in {"polymarket_price_to_beat", "gamma_price_to_beat"}:
         return QUALITY_HIGH
-    if source in {"rtds_chainlink_twap_60s", "rtds_chainlink_tick"}:
+    if source in {"rtds_chainlink_twap_60s", "rtds_chainlink_twap_60s_db"}:
         return QUALITY_GOOD
-    if source in {"chainlink_onchain_twap_60s", "chainlink_onchain_tick", "chainlink_ws"}:
+    if source in {"chainlink_onchain_twap_60s"}:
+        return QUALITY_FALLBACK
+    if source in {"rtds_chainlink_tick", "rtds_chainlink_tick_single"}:
+        return QUALITY_DEGRADED
+    if source in {"chainlink_onchain_tick", "chainlink_onchain_tick_single", "chainlink_ws"}:
         return QUALITY_FALLBACK
     if source in {"binance_candle", "coinbase_spot", "candle_close", "gamma_recursive_search", "gamma_text_parse"}:
         return QUALITY_FALLBACK
