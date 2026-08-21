@@ -109,6 +109,7 @@ class LiveSignal:
     strike_source: str | None = None  # which source produced the strike price
     reference_age_ms: int | None = None  # age of reference price at signal time
     quality_status: str = "estimated"  # good | degraded | fallback | estimated
+    gamma_price_to_beat: float | None = None  # Gamma metadata value (comparison only, not canonical for 15m)
 
 
 def get_current_market(duration: str = "1h") -> dict | None:
@@ -763,21 +764,16 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
                 else:
                     current_price, price_source = None, None
 
-    # Use Polymarket's official strike if available, else compute from candles
-    strike_price = market.get("price_to_beat")
+    # Strike price extraction
+    # For 15m: ALWAYS use Chainlink 60s TWAP — Gamma priceToBeat is NOT
+    # authoritative for 15m markets. Expose it as gamma_price_to_beat only.
+    # For 1h: Gamma eventMetadata.priceToBeat is the canonical strike.
+    gamma_price_to_beat = market.get("price_to_beat")
+    strike_price = None
     strike_source = None
-    if strike_price is not None:
-        try:
-            strike_price = float(strike_price)
-        except (TypeError, ValueError):
-            strike_price = None
-        if strike_price is not None and strike_price > 0:
-            strike_source = "polymarket_price_to_beat"
-            log.info(f"[{duration}] Using Polymarket priceToBeat strike: ${strike_price:,.2f}")
-        else:
-            strike_source = None
-    elif duration == "15m":
-        # 15m: Use multi-source opening reference recovery
+
+    if duration == "15m":
+        # 15m: Chainlink 60s TWAP at window start is the canonical strike
         from polymarket_fetcher import get_15m_opening_reference
         strike_price, strike_source = get_15m_opening_reference(hour_open_time or int(time.time() * 1000))
         if strike_price is not None:
@@ -785,16 +781,29 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
         else:
             log.warning(f"[15m] No opening reference available from any source")
     else:
-        # 1h: Recursive key search + text parsing fallback
-        strike_price = extract_strike_from_market(market)
-        if strike_price is not None:
-            strike_source = "gamma_recursive_search"
-            log.info(f"[{duration}] Strike from recursive key search: ${strike_price:,.2f}")
-        else:
-            strike_price = parse_strike_from_text(market)
+        # 1h: use Gamma priceToBeat if available
+        if gamma_price_to_beat is not None:
+            try:
+                strike_price = float(gamma_price_to_beat)
+            except (TypeError, ValueError):
+                strike_price = None
+            if strike_price is not None and strike_price > 0:
+                strike_source = "polymarket_price_to_beat"
+                log.info(f"[{duration}] Using Polymarket priceToBeat strike: ${strike_price:,.2f}")
+            else:
+                strike_source = None
+
+        if strike_price is None:
+            # 1h fallback: recursive key search + text parsing
+            strike_price = extract_strike_from_market(market)
             if strike_price is not None:
-                strike_source = "gamma_text_parse"
-                log.info(f"[{duration}] Strike from text parsing: ${strike_price:,.2f}")
+                strike_source = "gamma_recursive_search"
+                log.info(f"[{duration}] Strike from recursive key search: ${strike_price:,.2f}")
+            else:
+                strike_price = parse_strike_from_text(market)
+                if strike_price is not None:
+                    strike_source = "gamma_text_parse"
+                    log.info(f"[{duration}] Strike from text parsing: ${strike_price:,.2f}")
 
     if strike_price is None:
         if duration != "15m" and hour_open_time is not None and len(df_price) > 0:
@@ -889,6 +898,7 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
         strike_source=strike_source,
         reference_age_ms=reference_age_ms,
         quality_status=quality_status,
+        gamma_price_to_beat=gamma_price_to_beat if duration == "15m" else None,
         note=note,
     )
 

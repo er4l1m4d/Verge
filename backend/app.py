@@ -160,6 +160,7 @@ def signal():
             "reference_age_seconds": round(sig.reference_age_ms / 1000, 2) if sig.reference_age_ms else None,
             "difference": round(sig.current_price - sig.strike_price, 2) if sig.current_price and sig.strike_price else None,
             "difference_percent": round((sig.current_price - sig.strike_price) / sig.strike_price * 100, 6) if sig.current_price and sig.strike_price else None,
+            "gamma_price_to_beat": sig.gamma_price_to_beat,
             "note": sig.note,
             "divergence_signal": sig.divergence_signal,
             "fear_greed_value": sig.fear_greed_value,
@@ -216,15 +217,13 @@ def candles():
                     "close": round(float(row["close"]), 2),
                 })
 
-            # 15m strike: prefer official, then RTDS Chainlink TWAP at window start
-            if official_strike:
-                strike = round(official_strike, 2)
-            elif market and market.get("window_open"):
+            # 15m strike: ALWAYS use Chainlink 60s TWAP at window start
+            # Gamma priceToBeat is NOT authoritative for 15m markets
+            strike = None
+            if market and market.get("window_open"):
                 from polymarket_fetcher import get_15m_opening_reference
                 strike_val, _ = get_15m_opening_reference(market["window_open"])
                 strike = round(strike_val, 2) if strike_val else None
-            else:
-                strike = None
             spot = get_spot_price()
 
             return jsonify({
