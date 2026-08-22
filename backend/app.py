@@ -907,10 +907,11 @@ def api_diagnostics():
             return pm_data
         strike = pm_data.get("price_to_beat")
         strike_source = pm_data.get("price_to_beat_source") or ("polymarket_price_to_beat" if strike else None)
+        gamma_ptb = pm_data.get("gamma_price_to_beat")
         return {
             **pm_data,
             "price_to_beat_source": strike_source,
-            "strike_comparison": compare_prices(strike, strike),
+            "strike_comparison": compare_prices(strike, gamma_ptb) if gamma_ptb else None,
             "current_reference_comparison": compare_prices(verge_reference, strike),
             "verge_current_reference": verge_reference,
             "verge_current_reference_source": verge_reference_source,
@@ -960,6 +961,7 @@ def api_price_reference():
         import db
         from engine import compute_twap, get_current_market
         from polymarket_rtds import get_rtds_ticks
+        from polymarket_fetcher import get_current_15m_reference, classify_freshness
         from price_reference import assess_observation_health, build_reference_audit
 
         duration = request.args.get("duration", "15m")
@@ -972,6 +974,15 @@ def api_price_reference():
         health = assess_observation_health(rtds_ticks, now_ms=now_ms)
         latest = rtds_ticks[-1] if rtds_ticks else None
 
+        # Current reference = live 60s TWAP (same as signal engine)
+        ref = get_current_15m_reference()
+        current_twap = ref["twap_60s"] if ref else None
+        current_twap_source = ref["twap_source"] if ref else None
+        live_spot_price = ref["live_spot"] if ref else (latest["price"] if latest else None)
+        live_spot_src = ref["live_spot_source"] if ref else ("rtds_chainlink" if latest else None)
+        live_spot_age = ref["spot_age_ms"] if ref else (now_ms - latest["timestamp_ms"] if latest else None)
+        freshness = ref["freshness"] if ref else (classify_freshness(live_spot_age) if live_spot_age else None)
+
         client = db.get_client()
         persisted_ticks = db.get_recent_price_snapshots(
             client, "rtds_chainlink", "BTCUSD", since_ms=now_ms - 90_000
@@ -981,14 +992,16 @@ def api_price_reference():
         strike = market.get("price_to_beat") if market else None
         strike_value = float(strike) if strike is not None else None
         strike_source = market.get("price_to_beat_source") if market else None
+        gamma_ptb = market.get("gamma_price_to_beat") if market else None
+
         audit = build_reference_audit(
             market_id=(market.get("market_id") or market.get("condition_id")) if market else None,
             window_start=market.get("window_open") if market else None,
             window_end=market.get("window_end") if market else None,
             price_to_beat=strike_value,
             price_to_beat_source=strike_source,
-            current_reference=latest.get("price") if latest else None,
-            current_reference_source="rtds_chainlink" if latest else None,
+            current_reference=current_twap,
+            current_reference_source=current_twap_source,
             reference_health=health,
             opening_reference=strike_value,
             opening_reference_source=strike_source,
@@ -996,9 +1009,12 @@ def api_price_reference():
         return jsonify({
             "market": market,
             "reference": {
-                "source": "rtds_chainlink" if latest else None,
-                "price": latest.get("price") if latest else None,
-                "observed_at_ms": latest.get("timestamp_ms") if latest else None,
+                "current_twap": current_twap,
+                "current_twap_source": current_twap_source,
+                "live_spot": live_spot_price,
+                "live_spot_source": live_spot_src,
+                "live_spot_age_ms": live_spot_age,
+                "freshness": freshness,
             },
             "twap_estimate": {
                 "window_seconds": 60,
@@ -1006,6 +1022,7 @@ def api_price_reference():
                 "source": "polymarket_rtds_60s_twap_estimate",
                 "quality": health.status,
             },
+            "gamma_price_to_beat": gamma_ptb,
             "audit": audit,
             "timestamp": now_ms,
         })

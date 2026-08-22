@@ -733,6 +733,8 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
 
     if duration == "15m":
         # 15m: current reference = live 60s TWAP (same mechanism as strike)
+        # A raw tick is NOT a valid current reference for 15m.
+        # If TWAP is unavailable, current_price = null → signal skips.
         from polymarket_fetcher import get_current_15m_reference
         ref = get_current_15m_reference()
         if ref and ref["twap_60s"]:
@@ -746,23 +748,20 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
             price_freshness = ref["freshness"]
             log.info(f"[15m] Current reference (60s TWAP): ${current_price:,.2f} | spot: ${live_spot:,.2f} | freshness: {price_freshness}")
         else:
-            # TWAP unavailable — fall back to latest tick
+            # TWAP unavailable → no valid current reference → skip normal signal
+            current_price = None
+            price_source = None
+            reference_status = "fallback"
+            # Still populate live_spot for diagnostics if available
             from polymarket_rtds import get_rtds_ticks
             raw_ticks = get_rtds_ticks(since_ms=now_ms_val - 90_000)
             latest_tick = raw_ticks[-1] if raw_ticks else None
             if latest_tick:
-                current_price = latest_tick["price"]
-                price_source = "rtds_chainlink_tick_fallback"
-                reference_status = "fallback"
-                reference_age_ms = now_ms_val - latest_tick["timestamp_ms"]
-                live_spot = current_price
+                live_spot = latest_tick["price"]
                 live_spot_source = "rtds_chainlink"
-                live_spot_age_ms = reference_age_ms
-                price_freshness = classify_freshness(reference_age_ms)
-                log.warning(f"[15m] TWAP unavailable, using raw tick: ${current_price:,.2f}")
-            else:
-                reference_status = "fallback"
-                log.warning(f"[15m] No RTDS data available")
+                live_spot_age_ms = now_ms_val - latest_tick["timestamp_ms"]
+                price_freshness = classify_freshness(live_spot_age_ms)
+            log.warning(f"[15m] 60s TWAP unavailable — current reference is null, signal will skip")
 
         reference_health = assess_observation_health(
             get_rtds_ticks(since_ms=now_ms_val - 90_000), now_ms=now_ms_val

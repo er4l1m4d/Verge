@@ -23,20 +23,27 @@ The dashboard shows:
 ### Data Pipeline
 
 ```
-Polymarket WS (TWAP 60s) → Chainlink on-chain → Pyth oracle → Coinbase spot → candle close
+RTDS Chainlink (continuous) → ring buffer → DB snapshots → TWAP
      ↓
-Price source chain (closest-to-true-source first)
-     ↓
-Binance / CoinGecko OHLCV → indicators
-     ↓
-Polymarket Gamma API → market discovery + odds
+15m: opening 60s TWAP = strike, live 60s TWAP = current reference
+1h:  Gamma priceToBeat = strike, latest tick = current price
      ↓
 Indicators → Score → Decision → Fee check → Final call
 ```
 
 ### Price Source Chain
 
-Verge uses a layered price source chain, preferring the source closest to what Polymarket resolves against:
+Verge uses a layered price source chain. The source depends on the market duration:
+
+**15-minute markets** — resolves against Chainlink 60-second TWAP:
+
+| Role | Source | Description |
+|---|---|---|
+| **Strike** | Opening 60s TWAP | Chainlink BTC/USD TWAP over the 60s window before market open |
+| **Current Reference** | Live 60s TWAP | Rolling Chainlink TWAP from the RTDS ring buffer |
+| **Live Spot** | Latest RTDS tick | Latest instantaneous Chainlink observation (diagnostic only) |
+
+**1-hour markets** — resolves against Gamma's official priceToBeat:
 
 | Priority | Source | Method | Latency |
 |---|---|---|---|
@@ -106,7 +113,7 @@ verge/
 │   ├── db.py                     # Supabase schema + queries
 │   ├── telegram.py               # Telegram alerts + bot listener
 │   ├── migrations/               # SQL migrations (001–010)
-│   ├── tests/                    # 53 unit tests
+│   ├── tests/                    # 70 unit tests
 │   ├── requirements.txt          # Pinned Python dependencies
 │   └── Procfile                  # Render deployment
 ├── frontend/
@@ -135,6 +142,10 @@ verge/
 | `/api/window-outcomes/recent` | GET | Recent windows with outcomes |
 | `/api/phase2-progress` | GET | 15m window resolution progress (target: 300) |
 | `/api/diagnostics` | GET | Price source breakdown, live prices, TWAP vs tick, resolution agreement |
+| `/api/price-reference` | GET | 15m price-reference audit (opening TWAP, current TWAP, live spot) |
+| `/api/diagnostics/reference/<id>` | GET | Per-market reference audit with opening vs live health |
+| `/api/diagnostics/15m-reference` | GET | Three-way comparison: Gamma PTB vs RTDS TWAP vs DB TWAP |
+| `/api/diagnostics/resolution-audit` | GET | Historical resolution audit with per-row and aggregate stats |
 | `/api/frozen` | GET | Currently frozen durations |
 | `/api/admin/freeze` | POST | Freeze/unfreeze a duration |
 | `/api/weekly-digest` | GET | Send Telegram weekly digest |
@@ -149,7 +160,7 @@ All endpoints require the `X-Secret` header or `?secret=` query param.
 ### Local Resolution
 Verge resolves markets locally for speed:
 - **1h**: Binance 1h candle open vs close
-- **15m**: Chainlink ticks from `price_snapshots` table (fallback: Coinbase → Binance 5m)
+- **15m**: Chainlink 60-second TWAP at window open vs current 60-second TWAP
 
 ### Polymarket Validation
 After local resolution, Verge queries Polymarket's official outcome via the Gamma API:
@@ -174,7 +185,7 @@ The diagnostics page (`/diagnostics`) shows:
 - **Backend**: Render — `https://verge-1-i4zv.onrender.com`
 - **Frontend**: Vercel — `https://vergesignals.vercel.app`
 - **Database**: Supabase (PostgreSQL)
-- **Monitoring**: cron-job.org (heartbeat every 5 minutes)
+- **Monitoring**: cron-job.org (heartbeat every 1 minute)
 
 ## Telegram Bot
 
