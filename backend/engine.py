@@ -110,6 +110,10 @@ class LiveSignal:
     reference_age_ms: int | None = None  # age of reference price at signal time
     quality_status: str = "estimated"  # good | degraded | fallback | estimated
     gamma_price_to_beat: float | None = None  # Gamma metadata value (comparison only, not canonical for 15m)
+    live_spot: float | None = None  # latest raw RTDS tick (diagnostic, not used for 15m signal)
+    live_spot_source: str | None = None  # source of the raw tick
+    live_spot_age_ms: int | None = None  # age of the raw tick
+    price_freshness: str | None = None  # LIVE | DELAYED | STALE | INVALID
 
 
 def get_current_market(duration: str = "1h") -> dict | None:
@@ -700,9 +704,10 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
     elif edge.final_decision == "BET LOWER":
         suggested_price = round((1 - odds) * discount, 2)
 
-    # Strike + current price (prefer Polymarket's official priceToBeat)
-    # Current price = latest RTDS Chainlink tick (matches Polymarket's live display)
-    # TWAP is kept separate for settlement/reference analysis
+    # Strike + current price
+    # 15m: current_price = live 60s Chainlink TWAP (matches resolution mechanism)
+    #      live_spot = latest raw RTDS tick (diagnostic only)
+    # 1h:  current_price = latest RTDS tick (existing behavior)
     import db as _db
     from price_reference import (
         QUALITY_DEGRADED,
@@ -714,55 +719,98 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
         classify_reference_source,
         classify_strike_source,
     )
+    from polymarket_fetcher import classify_freshness
     now_ms_val = int(time.time() * 1000)
     current_price = None
     price_source = None
     reference_age_ms = None
     reference_status = "estimated"
     reference_health = None
+    live_spot = None
+    live_spot_source = None
+    live_spot_age_ms = None
+    price_freshness = None
 
-    # Try RTDS ticks first (in-memory ring buffer, no DB hit)
-    from polymarket_rtds import get_rtds_ticks
-    raw_ticks = get_rtds_ticks(since_ms=now_ms_val - 90_000)
     if duration == "15m":
-        reference_health = assess_observation_health(raw_ticks, now_ms=now_ms_val)
+        # 15m: current reference = live 60s TWAP (same mechanism as strike)
+        from polymarket_fetcher import get_current_15m_reference
+        ref = get_current_15m_reference()
+        if ref and ref["twap_60s"]:
+            current_price = ref["twap_60s"]
+            price_source = ref["twap_source"]
+            reference_status = "estimated"
+            reference_age_ms = ref["spot_age_ms"]  # age relative to latest tick
+            live_spot = ref["live_spot"]
+            live_spot_source = ref["live_spot_source"]
+            live_spot_age_ms = ref["spot_age_ms"]
+            price_freshness = ref["freshness"]
+            log.info(f"[15m] Current reference (60s TWAP): ${current_price:,.2f} | spot: ${live_spot:,.2f} | freshness: {price_freshness}")
+        else:
+            # TWAP unavailable — fall back to latest tick
+            from polymarket_rtds import get_rtds_ticks
+            raw_ticks = get_rtds_ticks(since_ms=now_ms_val - 90_000)
+            latest_tick = raw_ticks[-1] if raw_ticks else None
+            if latest_tick:
+                current_price = latest_tick["price"]
+                price_source = "rtds_chainlink_tick_fallback"
+                reference_status = "fallback"
+                reference_age_ms = now_ms_val - latest_tick["timestamp_ms"]
+                live_spot = current_price
+                live_spot_source = "rtds_chainlink"
+                live_spot_age_ms = reference_age_ms
+                price_freshness = classify_freshness(reference_age_ms)
+                log.warning(f"[15m] TWAP unavailable, using raw tick: ${current_price:,.2f}")
+            else:
+                reference_status = "fallback"
+                log.warning(f"[15m] No RTDS data available")
 
-    # Current price = latest RTDS tick (matches what Polymarket shows)
-    latest_tick = raw_ticks[-1] if raw_ticks else None
-    if latest_tick:
-        current_price, price_source = latest_tick["price"], "rtds_chainlink"
-        reference_status = "estimated"
-        reference_age_ms = now_ms_val - latest_tick["timestamp_ms"]
-        log.info(f"[{duration}] RTDS latest tick: ${current_price:,.2f} (age: {now_ms_val - latest_tick['timestamp_ms']}ms)")
+        reference_health = assess_observation_health(
+            get_rtds_ticks(since_ms=now_ms_val - 90_000), now_ms=now_ms_val
+        )
     else:
-        reference_status = "fallback"
-        # Fallback: WSS cache (in-memory, no DB hit)
-        try:
-            from chainlink_ws import get_chainlink_ws_price
-            wss_price = get_chainlink_ws_price()
-            if wss_price and wss_price > 0:
-                current_price, price_source = wss_price, "chainlink_ws"
-                log.info(f"[{duration}] Chainlink WSS price: ${wss_price:,.2f}")
-            else:
-                raise ValueError("no WSS price")
-        except Exception:
-            # Fallback: Chainlink on-chain (direct contract read)
-            from chainlink_fetcher import get_chainlink_price
-            cl_price = get_chainlink_price()
-            if cl_price:
-                current_price, price_source = cl_price, "chainlink_onchain"
-                log.info(f"[{duration}] Chainlink on-chain price: ${cl_price:,.2f}")
-            else:
-                # Fallback: Coinbase spot
-                spot = get_spot_price()
-                if spot:
-                    current_price, price_source = spot, "coinbase_spot"
-                    log.info(f"[{duration}] Coinbase spot price: ${spot:,.2f}")
-                elif len(df_price) > 0:
-                    current_price, price_source = float(df_price.iloc[-1]["close"]), "candle_close"
-                    log.info(f"[{duration}] Candle close price: ${current_price:,.2f}")
+        # 1h: existing behavior — latest RTDS tick as current price
+        from polymarket_rtds import get_rtds_ticks
+        raw_ticks = get_rtds_ticks(since_ms=now_ms_val - 90_000)
+
+        latest_tick = raw_ticks[-1] if raw_ticks else None
+        if latest_tick:
+            current_price, price_source = latest_tick["price"], "rtds_chainlink"
+            reference_status = "estimated"
+            reference_age_ms = now_ms_val - latest_tick["timestamp_ms"]
+            live_spot = current_price
+            live_spot_source = "rtds_chainlink"
+            live_spot_age_ms = reference_age_ms
+            price_freshness = classify_freshness(reference_age_ms)
+            log.info(f"[{duration}] RTDS latest tick: ${current_price:,.2f} (age: {reference_age_ms}ms)")
+        else:
+            reference_status = "fallback"
+            # Fallback: WSS cache (in-memory, no DB hit)
+            try:
+                from chainlink_ws import get_chainlink_ws_price
+                wss_price = get_chainlink_ws_price()
+                if wss_price and wss_price > 0:
+                    current_price, price_source = wss_price, "chainlink_ws"
+                    log.info(f"[{duration}] Chainlink WSS price: ${wss_price:,.2f}")
                 else:
-                    current_price, price_source = None, None
+                    raise ValueError("no WSS price")
+            except Exception:
+                # Fallback: Chainlink on-chain (direct contract read)
+                from chainlink_fetcher import get_chainlink_price
+                cl_price = get_chainlink_price()
+                if cl_price:
+                    current_price, price_source = cl_price, "chainlink_onchain"
+                    log.info(f"[{duration}] Chainlink on-chain price: ${cl_price:,.2f}")
+                else:
+                    # Fallback: Coinbase spot
+                    spot = get_spot_price()
+                    if spot:
+                        current_price, price_source = spot, "coinbase_spot"
+                        log.info(f"[{duration}] Coinbase spot price: ${spot:,.2f}")
+                    elif len(df_price) > 0:
+                        current_price, price_source = float(df_price.iloc[-1]["close"]), "candle_close"
+                        log.info(f"[{duration}] Candle close price: ${current_price:,.2f}")
+                    else:
+                        current_price, price_source = None, None
 
     # Strike price extraction
     # For 15m: ALWAYS use Chainlink 60s TWAP — Gamma priceToBeat is NOT
@@ -899,6 +947,10 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
         reference_age_ms=reference_age_ms,
         quality_status=quality_status,
         gamma_price_to_beat=gamma_price_to_beat if duration == "15m" else None,
+        live_spot=live_spot,
+        live_spot_source=live_spot_source,
+        live_spot_age_ms=live_spot_age_ms,
+        price_freshness=price_freshness,
         note=note,
     )
 

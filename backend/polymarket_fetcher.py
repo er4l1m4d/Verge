@@ -381,3 +381,84 @@ def get_15m_opening_reference(window_start_ms: int) -> tuple[float | None, str]:
         pass
 
     return None, "none"
+
+
+def get_current_15m_reference() -> dict | None:
+    """Compute the current 60s Chainlink TWAP from the live RTDS ring buffer.
+
+    This is the "current reference" for 15m markets — the live equivalent
+    of the opening strike. It represents where the market's reference
+    mechanism currently sits, not the latest instantaneous tick.
+
+    Returns:
+        {
+            "twap_60s": float,          # live 60s TWAP
+            "twap_source": str,         # source label
+            "live_spot": float,         # latest raw tick
+            "live_spot_source": str,    # source of raw tick
+            "samples": int,             # ticks in the 60s window
+            "spot_age_ms": int,         # age of latest tick
+            "freshness": str,           # LIVE | DELAYED | STALE | INVALID
+        } or None
+    """
+    import time as _time
+    now_ms = int(_time.time() * 1000)
+
+    try:
+        from polymarket_rtds import get_rtds_ticks
+        from engine import compute_twap
+        from db import PriceSnapshotRow
+
+        ticks = get_rtds_ticks(since_ms=now_ms - 90_000)
+        if not ticks:
+            return None
+
+        latest_tick = ticks[-1]
+        spot_age_ms = now_ms - latest_tick["timestamp_ms"]
+
+        # Compute live 60s TWAP
+        rows = [PriceSnapshotRow(source="rtds_chainlink", symbol="BTCUSD",
+                                 price=t["price"], timestamp_ms=t["timestamp_ms"])
+                for t in ticks]
+        window_rows = [r for r in rows if r.timestamp_ms >= now_ms - 60_000]
+
+        twap = None
+        twap_samples = 0
+        if len(window_rows) >= 2:
+            twap = compute_twap(window_rows, window_end_ms=now_ms, window_seconds=60)
+            twap_samples = len(window_rows)
+
+        freshness = classify_freshness(spot_age_ms)
+
+        return {
+            "twap_60s": twap,
+            "twap_source": "rtds_chainlink_twap_60s" if twap else None,
+            "live_spot": latest_tick["price"],
+            "live_spot_source": "rtds_chainlink",
+            "samples": twap_samples,
+            "spot_age_ms": spot_age_ms,
+            "freshness": freshness,
+        }
+    except ImportError:
+        pass
+
+    return None
+
+
+def classify_freshness(age_ms: int) -> str:
+    """Classify price data freshness based on age.
+
+    Thresholds:
+        < 2s       LIVE
+        2-5s       DELAYED
+        5-15s      STALE
+        > 15s      INVALID
+    """
+    if age_ms < 2_000:
+        return "LIVE"
+    elif age_ms < 5_000:
+        return "DELAYED"
+    elif age_ms < 15_000:
+        return "STALE"
+    else:
+        return "INVALID"

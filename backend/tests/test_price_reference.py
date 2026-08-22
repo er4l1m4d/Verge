@@ -144,3 +144,31 @@ def test_reference_audit_separates_strike_and_current_reference():
     assert audit["current_reference_quality"] == QUALITY_GOOD
     assert audit["difference"] == 0.2
     assert audit["fallback_used"] is False
+
+
+class TestClassifyFreshness:
+    """Tests for price freshness classification."""
+
+    def test_live(self):
+        from polymarket_fetcher import classify_freshness
+        assert classify_freshness(500) == "LIVE"
+        assert classify_freshness(0) == "LIVE"
+        assert classify_freshness(1999) == "LIVE"
+
+    def test_delayed(self):
+        from polymarket_fetcher import classify_freshness
+        assert classify_freshness(2000) == "DELAYED"
+        assert classify_freshness(3500) == "DELAYED"
+        assert classify_freshness(4999) == "DELAYED"
+
+    def test_stale(self):
+        from polymarket_fetcher import classify_freshness
+        assert classify_freshness(5000) == "STALE"
+        assert classify_freshness(10000) == "STALE"
+        assert classify_freshness(14999) == "STALE"
+
+    def test_invalid(self):
+        from polymarket_fetcher import classify_freshness
+        assert classify_freshness(15000) == "INVALID"
+        assert classify_freshness(30000) == "INVALID"
+        assert classify_freshness(60000) == "INVALID"
