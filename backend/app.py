@@ -1085,31 +1085,40 @@ def api_diagnostics_reference(market_id):
             except Exception:
                 pass
 
+        slug = market_data.get("slug", "")
+        is_15m = "15m" in slug
+
         strike_price = None
         strike_source = None
-        # Check the parent event for priceToBeat
-        event_id = market_data.get("eventId")
-        if event_id:
-            try:
-                evt_resp = __import__("requests").get(
-                    f"https://gamma-api.polymarket.com/events/{event_id}",
-                    timeout=10,
-                )
-                if evt_resp.ok:
-                    evt = evt_resp.json()
-                    metadata = evt.get("eventMetadata") or {}
-                    ptb = metadata.get("priceToBeat")
-                    if ptb:
-                        try:
-                            strike_price = float(ptb)
-                            if strike_price > 0:
-                                strike_source = "polymarket_price_to_beat"
-                            else:
+
+        if is_15m and window_start:
+            # 15m: Chainlink 60s TWAP is the canonical strike
+            from polymarket_fetcher import get_15m_opening_reference
+            strike_price, strike_source = get_15m_opening_reference(window_start)
+        else:
+            # 1h: Gamma eventMetadata.priceToBeat is the canonical strike
+            event_id = market_data.get("eventId")
+            if event_id:
+                try:
+                    evt_resp = __import__("requests").get(
+                        f"https://gamma-api.polymarket.com/events/{event_id}",
+                        timeout=10,
+                    )
+                    if evt_resp.ok:
+                        evt = evt_resp.json()
+                        metadata = evt.get("eventMetadata") or {}
+                        ptb = metadata.get("priceToBeat")
+                        if ptb:
+                            try:
+                                strike_price = float(ptb)
+                                if strike_price > 0:
+                                    strike_source = "polymarket_price_to_beat"
+                                else:
+                                    strike_price = None
+                            except (TypeError, ValueError):
                                 strike_price = None
-                        except (TypeError, ValueError):
-                            strike_price = None
-            except Exception:
-                pass
+                except Exception:
+                    pass
 
         # Get RTDS ticks and health
         rtds_ticks = get_rtds_ticks(since_ms=now_ms - 90_000)
@@ -1124,6 +1133,28 @@ def api_diagnostics_reference(market_id):
             client, "rtds_chainlink", "BTCUSD", since_ms=now_ms - 90_000
         )
         twap = compute_twap(persisted_ticks, now_ms) if len(persisted_ticks) >= 2 else None
+
+        # For 15m: fetch Gamma priceToBeat as comparison (not canonical)
+        gamma_price_to_beat_val = None
+        if is_15m:
+            event_id = market_data.get("eventId")
+            if event_id:
+                try:
+                    evt_resp = __import__("requests").get(
+                        f"https://gamma-api.polymarket.com/events/{event_id}",
+                        timeout=10,
+                    )
+                    if evt_resp.ok:
+                        evt = evt_resp.json()
+                        metadata = evt.get("eventMetadata") or {}
+                        ptb = metadata.get("priceToBeat")
+                        if ptb:
+                            try:
+                                gamma_price_to_beat_val = float(ptb)
+                            except (TypeError, ValueError):
+                                pass
+                except Exception:
+                    pass
 
         audit = build_reference_audit(
             market_id=market_id,
@@ -1144,6 +1175,7 @@ def api_diagnostics_reference(market_id):
             "window_end": window_end,
             "price_to_beat": strike_price,
             "price_to_beat_source": strike_source,
+            "gamma_price_to_beat": gamma_price_to_beat_val if is_15m else None,
             "current_reference": current_reference,
             "current_reference_source": current_reference_source,
             "reference_quality": health.status if health else None,

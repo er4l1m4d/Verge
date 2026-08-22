@@ -301,13 +301,14 @@ def get_15m_opening_reference(window_start_ms: int) -> tuple[float | None, str]:
       1. RTDS Chainlink 60s TWAP from in-memory ring buffer (fastest)
       2. RTDS Chainlink 60s TWAP computed from DB snapshots (after restart)
       3. On-chain Chainlink 60s TWAP computed from DB snapshots (fallback)
-      4. Single RTDS Chainlink tick at window start (sparse data fallback)
-      5. Single on-chain Chainlink tick at window start (last resort)
 
     Returns (price, source_label) or (None, "none").
+
+    A single tick is NOT a TWAP. If fewer than 2 ticks are available in
+    the 60s window, no strike is returned — Polymarket resolves on the
+    60-second TWAP stream, not a single observation.
     """
     import time
-    import requests
 
     # 1. RTDS Chainlink 60s TWAP from in-memory ring buffer (no DB hit)
     try:
@@ -319,9 +320,12 @@ def get_15m_opening_reference(window_start_ms: int) -> tuple[float | None, str]:
             rows = [PriceSnapshotRow(source="rtds_chainlink", symbol="BTCUSD",
                                      price=t["price"], timestamp_ms=t["timestamp_ms"])
                     for t in ticks]
-            twap = compute_twap(rows, window_end_ms=window_start_ms, window_seconds=60)
-            if twap:
-                return twap, "rtds_chainlink_twap_60s"
+            window_rows = [r for r in rows
+                           if window_start_ms - 60_000 <= r.timestamp_ms <= window_start_ms]
+            if len(window_rows) >= 2:
+                twap = compute_twap(window_rows, window_end_ms=window_start_ms, window_seconds=60)
+                if twap:
+                    return twap, "rtds_chainlink_twap_60s"
     except ImportError:
         pass
 
@@ -335,7 +339,6 @@ def get_15m_opening_reference(window_start_ms: int) -> tuple[float | None, str]:
             client, source="rtds_chainlink", symbol="BTCUSD",
             since_ms=window_start_ms - 65_000, limit=120,
         )
-        # Filter to the 60s window ending at window_start_ms
         window_ticks = [t for t in ticks
                         if window_start_ms - 60_000 <= t["timestamp_ms"] <= window_start_ms]
         if len(window_ticks) >= 2:
@@ -367,32 +370,6 @@ def get_15m_opening_reference(window_start_ms: int) -> tuple[float | None, str]:
             twap = compute_twap(rows, window_end_ms=window_start_ms, window_seconds=60)
             if twap:
                 return twap, "chainlink_onchain_twap_60s"
-    except Exception:
-        pass
-
-    # 4. Single RTDS Chainlink tick at window start (sparse data — NOT a TWAP)
-    try:
-        import db
-        client = db.get_client()
-        ticks = db.get_price_snapshots(
-            client, source="rtds_chainlink", symbol="BTCUSD",
-            since_ms=window_start_ms - 5_000, limit=10,
-        )
-        if ticks:
-            return float(ticks[0]["price"]), "rtds_chainlink_tick_single"
-    except Exception:
-        pass
-
-    # 5. Single on-chain Chainlink tick at window start (last resort)
-    try:
-        import db
-        client = db.get_client()
-        ticks = db.get_price_snapshots(
-            client, source="chainlink_onchain", symbol="BTC",
-            since_ms=window_start_ms - 5_000, limit=10,
-        )
-        if ticks:
-            return float(ticks[0]["price"]), "chainlink_onchain_tick_single"
     except Exception:
         pass
 
