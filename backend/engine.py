@@ -253,6 +253,10 @@ def _get_current_15m_market() -> dict | None:
                 f"priceToBeat={price_to_beat} market_id={mid}"
             )
 
+            # For 15m: price_to_beat is null (canonical strike = Chainlink TWAP)
+            # gamma_price_to_beat preserves the Gamma value for comparison only
+            gamma_ptb = price_to_beat if has_ptb else None
+
             return {
                 "token_id": tokens[0],
                 "slug": event_slug,
@@ -260,8 +264,9 @@ def _get_current_15m_market() -> dict | None:
                 "window_open": start_ms,
                 "window_end": end_ms,
                 "duration": "15m",
-                "price_to_beat": price_to_beat if has_ptb else None,
-                "price_to_beat_source": "polymarket_price_to_beat" if has_ptb else None,
+                "price_to_beat": None,
+                "price_to_beat_source": None,
+                "gamma_price_to_beat": gamma_ptb,
                 "up_odds": up_odds,
                 "condition_id": cid,
                 "market_id": str(mid) if mid else None,
@@ -815,7 +820,7 @@ def _generate_signal_inner(duration: str = "1h") -> LiveSignal:
     # For 15m: ALWAYS use Chainlink 60s TWAP — Gamma priceToBeat is NOT
     # authoritative for 15m markets. Expose it as gamma_price_to_beat only.
     # For 1h: Gamma eventMetadata.priceToBeat is the canonical strike.
-    gamma_price_to_beat = market.get("price_to_beat")
+    gamma_price_to_beat = market.get("gamma_price_to_beat") or market.get("price_to_beat")
     strike_price = None
     strike_source = None
 

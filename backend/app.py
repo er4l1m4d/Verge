@@ -196,7 +196,7 @@ def candles():
 
         # Get official strike from Polymarket
         market = get_current_market(duration)
-        official_strike = market.get("price_to_beat") if market else None
+        official_strike = market.get("price_to_beat") if market and duration != "15m" else None
 
         if duration == "15m":
             # 15m: return 1-minute bars from Chainlink/Binance
@@ -1146,8 +1146,23 @@ def api_diagnostics_reference(market_id):
         live_health = assess_observation_health(rtds_ticks, now_ms=now_ms)
         latest = rtds_ticks[-1] if rtds_ticks else None
 
-        current_reference = latest["price"] if latest else None
-        current_reference_source = "rtds_chainlink" if latest else None
+        # Current reference: 60s TWAP for 15m, raw tick for 1h
+        if is_15m:
+            from polymarket_fetcher import get_current_15m_reference
+            ref = get_current_15m_reference()
+            current_reference = ref["twap_60s"] if ref else None
+            current_reference_source = ref["twap_source"] if ref else None
+            live_spot_price = ref["live_spot"] if ref else (latest["price"] if latest else None)
+            live_spot_source = ref["live_spot_source"] if ref else ("rtds_chainlink" if latest else None)
+            live_spot_age_ms = ref["spot_age_ms"] if ref else (now_ms - latest["timestamp_ms"] if latest else None)
+            freshness = ref["freshness"] if ref else None
+        else:
+            current_reference = latest["price"] if latest else None
+            current_reference_source = "rtds_chainlink" if latest else None
+            live_spot_price = current_reference
+            live_spot_source = current_reference_source
+            live_spot_age_ms = now_ms - latest["timestamp_ms"] if latest else None
+            freshness = None
 
         # Opening-reference health: evaluate ticks in the 60s window before window_start
         opening_health = None
@@ -1206,6 +1221,10 @@ def api_diagnostics_reference(market_id):
             "gamma_price_to_beat": gamma_price_to_beat_val if is_15m else None,
             "current_reference": current_reference,
             "current_reference_source": current_reference_source,
+            "live_spot": live_spot_price,
+            "live_spot_source": live_spot_source,
+            "live_spot_age_ms": live_spot_age_ms,
+            "freshness": freshness,
             "opening_health": opening_health.to_dict() if opening_health else None,
             "live_health": live_health.to_dict() if live_health else None,
             "twap_estimate": twap,
@@ -1287,9 +1306,9 @@ def api_15m_reference():
         market_id = market.get("market_id")
         condition_id = market.get("condition_id")
 
-        # 2. Gamma priceToBeat
-        gamma_ptb = market.get("price_to_beat")
-        gamma_ptb_source = market.get("price_to_beat_source")
+        # 2. Gamma priceToBeat (comparison only — canonical strike is TWAP)
+        gamma_ptb = market.get("gamma_price_to_beat")
+        gamma_ptb_source = "polymarket_price_to_beat" if gamma_ptb else None
 
         # 3. RTDS opening 60s TWAP from ring buffer
         rtds_ticks_buf = get_rtds_ticks(since_ms=window_start - 65_000)
