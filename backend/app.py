@@ -1122,13 +1122,20 @@ def api_diagnostics_reference(market_id):
 
         # Get RTDS ticks and health
         rtds_ticks = get_rtds_ticks(since_ms=now_ms - 90_000)
-        health = assess_observation_health(rtds_ticks, now_ms=now_ms)
+        live_health = assess_observation_health(rtds_ticks, now_ms=now_ms)
         latest = rtds_ticks[-1] if rtds_ticks else None
 
         current_reference = latest["price"] if latest else None
         current_reference_source = "rtds_chainlink" if latest else None
 
-        # TWAP estimate
+        # Opening-reference health: evaluate ticks in the 60s window before window_start
+        opening_health = None
+        if window_start:
+            opening_ticks = [t for t in rtds_ticks
+                             if window_start - 60_000 <= t.get("timestamp_ms", 0) <= window_start]
+            opening_health = assess_observation_health(opening_ticks, now_ms=window_start)
+
+        # TWAP estimate (live, last 90s)
         persisted_ticks = db.get_recent_price_snapshots(
             client, "rtds_chainlink", "BTCUSD", since_ms=now_ms - 90_000
         )
@@ -1164,7 +1171,7 @@ def api_diagnostics_reference(market_id):
             price_to_beat_source=strike_source,
             current_reference=current_reference,
             current_reference_source=current_reference_source,
-            reference_health=health,
+            reference_health=opening_health or live_health,
             opening_reference=strike_price,
             opening_reference_source=strike_source,
         )
@@ -1178,7 +1185,8 @@ def api_diagnostics_reference(market_id):
             "gamma_price_to_beat": gamma_price_to_beat_val if is_15m else None,
             "current_reference": current_reference,
             "current_reference_source": current_reference_source,
-            "reference_quality": health.status if health else None,
+            "opening_health": opening_health.to_dict() if opening_health else None,
+            "live_health": live_health.to_dict() if live_health else None,
             "twap_estimate": twap,
             "up_odds": up_odds,
             "question": market_data.get("question", ""),

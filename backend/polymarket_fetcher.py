@@ -252,33 +252,40 @@ def get_polymarket_live_market(series_slug: str = "btc-up-or-down-15m") -> dict 
                     if prices and len(prices) >= 2:
                         up_odds = float(prices[0])
                         down_odds = float(prices[1])
-                # Parse priceToBeat
+                # Parse priceToBeat from Gamma (comparison only for 15m)
                 metadata = event.get("eventMetadata") or {}
                 ptb = metadata.get("priceToBeat")
-                price_to_beat_source = None
+                gamma_price_to_beat = None
                 try:
-                    price_to_beat = float(ptb) if ptb else None
-                    if price_to_beat is not None and price_to_beat > 0:
-                        price_to_beat_source = "polymarket_price_to_beat"
-                    else:
-                        price_to_beat = None
+                    if ptb:
+                        gamma_price_to_beat = float(ptb)
+                        if gamma_price_to_beat <= 0:
+                            gamma_price_to_beat = None
                 except (TypeError, ValueError):
-                    price_to_beat = None
+                    pass
 
-                # 15m fallback: use get_15m_opening_reference (60s TWAP)
-                if price_to_beat is None and "15m" in series_slug:
+                # 15m: canonical strike is Chainlink 60s TWAP, not Gamma
+                price_to_beat = None
+                price_to_beat_source = None
+                if "15m" in series_slug:
                     try:
                         from polymarket_fetcher import get_15m_opening_reference
-                        ptb, fallback_source = get_15m_opening_reference(start_ms)
-                        if ptb:
-                            price_to_beat = ptb
-                            price_to_beat_source = fallback_source
+                        ptb_val, ptb_source = get_15m_opening_reference(start_ms)
+                        if ptb_val:
+                            price_to_beat = ptb_val
+                            price_to_beat_source = ptb_source
                     except Exception:
                         pass
+                else:
+                    # 1h: Gamma priceToBeat is canonical
+                    price_to_beat = gamma_price_to_beat
+                    if price_to_beat is not None:
+                        price_to_beat_source = "polymarket_price_to_beat"
 
                 return {
                     "price_to_beat": price_to_beat,
                     "price_to_beat_source": price_to_beat_source,
+                    "gamma_price_to_beat": gamma_price_to_beat,
                     "up_odds": up_odds,
                     "down_odds": down_odds,
                     "question": market.get("question", ""),
