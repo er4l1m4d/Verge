@@ -50,14 +50,26 @@ def test_onchain_twap_is_fallback():
 def test_fresh_rtds_observations_are_good():
     now = 1_000_000
     ticks = [
-        {"timestamp_ms": now - 4000, "price": 100.0},
-        {"timestamp_ms": now - 2000, "price": 101.0},
-        {"timestamp_ms": now - 500, "price": 102.0},
+        {"timestamp_ms": now - 58_000, "price": 100.0},
+        {"timestamp_ms": now - 54_000, "price": 101.0},
+        {"timestamp_ms": now - 50_000, "price": 102.0},
+        {"timestamp_ms": now - 46_000, "price": 102.5},
+        {"timestamp_ms": now - 42_000, "price": 103.0},
+        {"timestamp_ms": now - 38_000, "price": 103.5},
+        {"timestamp_ms": now - 34_000, "price": 104.0},
+        {"timestamp_ms": now - 30_000, "price": 104.5},
+        {"timestamp_ms": now - 26_000, "price": 105.0},
+        {"timestamp_ms": now - 22_000, "price": 105.5},
+        {"timestamp_ms": now - 18_000, "price": 106.0},
+        {"timestamp_ms": now - 14_000, "price": 106.5},
+        {"timestamp_ms": now - 10_000, "price": 107.0},
+        {"timestamp_ms": now - 6_000, "price": 107.5},
+        {"timestamp_ms": now - 2_000, "price": 108.0},
     ]
     health = assess_observation_health(ticks, now_ms=now)
     assert health.status == QUALITY_GOOD
-    assert health.observation_count == 3
-    assert health.largest_gap_seconds == 2.0
+    assert health.observation_count == 15
+    assert health.coverage_ratio >= 0.5
 
 
 def test_stale_observations_are_invalid():
@@ -102,9 +114,20 @@ def test_reference_source_uses_health_for_rtds():
     now = 1_000_000
     health = assess_observation_health(
         [
-            {"timestamp_ms": now - 1000, "price": 100.0},
-            {"timestamp_ms": now - 500, "price": 101.0},
-            {"timestamp_ms": now - 100, "price": 102.0},
+            {"timestamp_ms": now - 55_000, "price": 100.0},
+            {"timestamp_ms": now - 51_000, "price": 101.0},
+            {"timestamp_ms": now - 47_000, "price": 102.0},
+            {"timestamp_ms": now - 43_000, "price": 102.5},
+            {"timestamp_ms": now - 39_000, "price": 103.0},
+            {"timestamp_ms": now - 35_000, "price": 103.5},
+            {"timestamp_ms": now - 31_000, "price": 104.0},
+            {"timestamp_ms": now - 27_000, "price": 104.5},
+            {"timestamp_ms": now - 23_000, "price": 105.0},
+            {"timestamp_ms": now - 19_000, "price": 105.5},
+            {"timestamp_ms": now - 15_000, "price": 106.0},
+            {"timestamp_ms": now - 11_000, "price": 106.5},
+            {"timestamp_ms": now - 7_000, "price": 107.0},
+            {"timestamp_ms": now - 3_000, "price": 107.5},
         ],
         now_ms=now,
     )
@@ -124,9 +147,20 @@ def test_reference_audit_separates_strike_and_current_reference():
     now = 1_000_000
     health = assess_observation_health(
         [
-            {"timestamp_ms": now - 1000, "price": 100.0},
-            {"timestamp_ms": now - 500, "price": 100.1},
-            {"timestamp_ms": now - 100, "price": 100.2},
+            {"timestamp_ms": now - 55_000, "price": 100.0},
+            {"timestamp_ms": now - 51_000, "price": 100.1},
+            {"timestamp_ms": now - 47_000, "price": 100.2},
+            {"timestamp_ms": now - 43_000, "price": 100.3},
+            {"timestamp_ms": now - 39_000, "price": 100.4},
+            {"timestamp_ms": now - 35_000, "price": 100.5},
+            {"timestamp_ms": now - 31_000, "price": 100.6},
+            {"timestamp_ms": now - 27_000, "price": 100.7},
+            {"timestamp_ms": now - 23_000, "price": 100.8},
+            {"timestamp_ms": now - 19_000, "price": 100.9},
+            {"timestamp_ms": now - 15_000, "price": 101.0},
+            {"timestamp_ms": now - 11_000, "price": 101.1},
+            {"timestamp_ms": now - 7_000, "price": 101.2},
+            {"timestamp_ms": now - 3_000, "price": 101.3},
         ],
         now_ms=now,
     )

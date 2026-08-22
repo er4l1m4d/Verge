@@ -989,9 +989,14 @@ def api_price_reference():
         )
         twap = compute_twap(persisted_ticks, now_ms) if len(persisted_ticks) >= 2 else None
 
-        strike = market.get("price_to_beat") if market else None
-        strike_value = float(strike) if strike is not None else None
-        strike_source = market.get("price_to_beat_source") if market else None
+        # Strike: 15m = opening TWAP, 1h = Gamma priceToBeat
+        if market and market.get("duration") == "15m" and market.get("window_open"):
+            from polymarket_fetcher import get_15m_opening_reference
+            strike_value, strike_source = get_15m_opening_reference(market["window_open"])
+        else:
+            strike = market.get("price_to_beat") if market else None
+            strike_value = float(strike) if strike is not None else None
+            strike_source = market.get("price_to_beat_source") if market else None
         gamma_ptb = market.get("gamma_price_to_beat") if market else None
 
         audit = build_reference_audit(

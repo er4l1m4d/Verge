@@ -23,6 +23,7 @@ STALE_REFERENCE_MS = int(os.environ.get("REFERENCE_STALE_MS", "15000"))
 MAX_GAP_GOOD_MS = int(os.environ.get("REFERENCE_MAX_GAP_GOOD_MS", "5000"))
 MAX_GAP_DEGRADED_MS = int(os.environ.get("REFERENCE_MAX_GAP_DEGRADED_MS", "15000"))
 MIN_OBSERVATIONS_60S = int(os.environ.get("REFERENCE_MIN_OBSERVATIONS_60S", "3"))
+MIN_COVERAGE_RATIO = float(os.environ.get("REFERENCE_MIN_COVERAGE_RATIO", "0.5"))
 
 
 @dataclass
@@ -35,6 +36,7 @@ class ObservationHealth:
     duplicate_observation_count: int
     out_of_order_count: int
     latest_age_ms: int | None
+    coverage_ratio: float | None
     reasons: list[str]
 
     def to_dict(self) -> dict:
@@ -101,6 +103,7 @@ def assess_observation_health(
             duplicate_observation_count=0,
             out_of_order_count=0,
             latest_age_ms=None,
+            coverage_ratio=None,
             reasons=["no_observations"],
         )
 
@@ -146,6 +149,15 @@ def assess_observation_health(
         status = QUALITY_DEGRADED if status != QUALITY_INVALID else status
         reasons.append("out_of_order_observations")
 
+    # Time coverage: what fraction of the window is spanned by observations?
+    coverage_ratio = None
+    if len(ordered) >= 2:
+        span_ms = ordered[-1]["timestamp_ms"] - ordered[0]["timestamp_ms"]
+        coverage_ratio = round(span_ms / window_ms, 4) if window_ms > 0 else 0
+        if coverage_ratio < MIN_COVERAGE_RATIO:
+            status = QUALITY_DEGRADED if status != QUALITY_INVALID else status
+            reasons.append("low_time_coverage")
+
     return ObservationHealth(
         status=status,
         observation_count=len(ordered),
@@ -155,6 +167,7 @@ def assess_observation_health(
         duplicate_observation_count=duplicate_count,
         out_of_order_count=out_of_order_count,
         latest_age_ms=latest_age_ms,
+        coverage_ratio=coverage_ratio,
         reasons=reasons,
     )
 
